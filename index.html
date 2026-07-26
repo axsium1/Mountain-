@@ -138,6 +138,8 @@
     <div class="peak-weather" id="peakWeather">—</div>
     <div class="peak-route" id="peakRoute"></div>
     <div class="peak-meta" id="peakMeta">—</div>
+    <div class="peak-achv" id="peakAchievements"></div>
+    <div class="peak-history" id="peakHistory"></div>
     <button class="btn-secondary" id="btnLeavePeak" style="width:100%;margin-top:16px;color:var(--danger);border-color:rgba(255,93,93,0.3);">Оставить эту вершину</button>
   </div>
 </div>
@@ -150,6 +152,18 @@
     <div class="field">
       <label class="field__label" for="rangeTitle">Название</label>
       <input type="text" id="rangeTitle" placeholder="Например: English" required maxlength="40" />
+    </div>
+    <div class="field">
+      <label class="field__label">Тип хребта</label>
+      <div class="segmented" id="rangeType">
+        <button type="button" data-type="regular" class="is-active">Обычный</button>
+        <button type="button" data-type="expedition">Экспедиция</button>
+      </div>
+      <p class="field__hint">Экспедиция — для целей с настоящей внешней датой (экзамен и т.п.). Одна вершина, без продолжения, темп пересчитывается каждый день под дедлайн.</p>
+    </div>
+    <div class="field" id="expeditionDateField" hidden>
+      <label class="field__label" for="expeditionDeadline">Дедлайн</label>
+      <input type="date" id="expeditionDeadline" />
     </div>
     <div class="field">
       <label class="field__label">Иконка</label>

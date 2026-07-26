@@ -27,6 +27,16 @@ const RANKS = [
 const COFFEE_COST = 150;
 const COFFEE_WEEKLY_LIMIT = 2;
 
+const SEVEN_SUMMITS = [
+  { key: 'kosciuszko',  name: 'Косцюшко',     continent: 'Австралия/Океания', height: 2230, tokens: 100 },
+  { key: 'vinson',      name: 'Винсон',        continent: 'Антарктида',        height: 4890, tokens: 150 },
+  { key: 'elbrus',      name: 'Эльбрус',       continent: 'Европа',            height: 5640, tokens: 200 },
+  { key: 'kilimanjaro', name: 'Килиманджаро',  continent: 'Африка',            height: 5900, tokens: 250 },
+  { key: 'denali',      name: 'Денали',        continent: 'Сев. Америка',      height: 6190, tokens: 300 },
+  { key: 'aconcagua',   name: 'Аконкагуа',     continent: 'Юж. Америка',       height: 6960, tokens: 400 },
+  { key: 'everest',     name: 'Эверест',       continent: 'Азия',              height: 8850, tokens: 1000 },
+];
+
 const ICONS = ['📖','🔤','💻','📚','🏃','🧘','🎸','🎨','✍️','🧠','💪','🗣️','🔬','🎯','⏱️','🌱','🍎','💧','🛌','📐','🧩','🎧','🖌️','🧪','🗂️','📈','🧗','🚴','🏊','🥗'];
 
 // ---------- Состояние ----------
@@ -59,6 +69,11 @@ function shiftDate(dateStr, deltaDays) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + deltaDays);
   return todayStr(d);
+}
+function daysBetweenDates(fromStr, toStr) {
+  const a = new Date(fromStr + 'T00:00:00');
+  const b = new Date(toStr + 'T00:00:00');
+  return Math.round((b - a) / 86400000);
 }
 function isoWeekKey(d = new Date()) {
   const date = new Date(d.getTime());
@@ -103,12 +118,15 @@ function makePeak(size, difficulty) {
   return { size, totalHeight, camps, checkpointHeight: 0, currentHeight: 0, createdAt: todayStr() };
 }
 
-function createRange({ title, icon, difficulty, size }) {
+function createRange({ title, icon, difficulty, size, type, deadline }) {
+  const peak = makePeak(size, difficulty);
+  if (type === 'expedition' && deadline) peak.deadline = deadline;
   const range = {
-    id: uid(), title, icon, difficulty, type: 'regular',
+    id: uid(), title, icon, difficulty, type: type || 'regular',
     careerHeight: 0,
     achievements: {},
-    currentPeak: makePeak(size, difficulty),
+    history: [],
+    currentPeak: peak,
   };
   state.ranges.push(range);
   persist(); renderAll();
@@ -117,38 +135,73 @@ function createRange({ title, icon, difficulty, size }) {
 
 function summitPeak(range) {
   const finished = range.currentPeak.totalHeight;
-  const idx = SIZE_ORDER.indexOf(range.currentPeak.size);
-  const nextSize = SIZE_ORDER[Math.min(idx + 1, SIZE_ORDER.length - 1)];
+  const size = range.currentPeak.size;
+  if (!range.history) range.history = [];
+  range.history.push({ size, outcome: 'summited', finishedAtHeight: finished, date: todayStr() });
   showToast(`🏁 Вершина покорена · ${finished} м`);
+  if (range.type === 'expedition') {
+    range.currentPeak.completed = true;
+    return;
+  }
+  const idx = SIZE_ORDER.indexOf(size);
+  const nextSize = SIZE_ORDER[Math.min(idx + 1, SIZE_ORDER.length - 1)];
   range.currentPeak = makePeak(nextSize, range.difficulty);
+}
+
+function checkAchievements(range) {
+  range.achievements = range.achievements || {};
+  const unlocked = [];
+  SEVEN_SUMMITS.forEach(peak => {
+    if (!range.achievements[peak.key] && (range.careerHeight || 0) >= peak.height) {
+      range.achievements[peak.key] = true;
+      state.tokens += peak.tokens;
+      unlocked.push(peak);
+    }
+  });
+  return unlocked;
 }
 
 function addHeight(rangeId, delta) {
   const range = getRange(rangeId);
-  if (!range) return { campReached: false, summited: false, rangeId };
+  if (!range) return { campReached: false, summited: false, rangeId, unlocked: [] };
   const peak = range.currentPeak;
+  const day = ensureDay(todayStr());
+  day.perRange[rangeId] = (day.perRange[rangeId] || 0) + delta;
+
+  if (peak.completed) {
+    let unlocked = [];
+    if (delta > 0) {
+      range.careerHeight = (range.careerHeight || 0) + delta;
+      unlocked = checkAchievements(range);
+    }
+    return { campReached: false, summited: false, rangeId, unlocked };
+  }
+
   const beforeCheckpoint = peak.checkpointHeight;
   peak.currentHeight = Math.max(peak.checkpointHeight, peak.currentHeight + delta);
-  range.careerHeight = Math.max(0, (range.careerHeight || 0) + delta);
 
   let summited = false;
+  let unlocked = [];
   if (delta > 0) {
+    range.careerHeight = (range.careerHeight || 0) + delta; // растёт только вперёд, не откатывается
     peak.camps.forEach(threshold => {
       if (peak.currentHeight >= threshold && threshold > peak.checkpointHeight) {
         peak.checkpointHeight = threshold;
       }
     });
+    unlocked = checkAchievements(range);
     if (peak.currentHeight >= peak.totalHeight) { summitPeak(range); summited = true; }
   }
 
-  const day = ensureDay(todayStr());
-  day.perRange[rangeId] = (day.perRange[rangeId] || 0) + delta;
-  return { campReached: !summited && peak.checkpointHeight > beforeCheckpoint, summited, rangeId };
+  return { campReached: !summited && peak.checkpointHeight > beforeCheckpoint, summited, rangeId, unlocked };
 }
 
 function leavePeak(rangeId) {
   const range = getRange(rangeId);
   if (!range) return;
+  if (!range.history) range.history = [];
+  range.history.push({ size: range.currentPeak.size, outcome: 'abandoned', finishedAtHeight: range.currentPeak.checkpointHeight, date: todayStr() });
+  if (range.type === 'expedition') range.type = 'regular';
   range.currentPeak = makePeak(range.currentPeak.size, range.difficulty);
   persist(); renderAll(); closePeakOverlay();
   showToast('Вершина оставлена — начинаем новую');
@@ -156,6 +209,24 @@ function leavePeak(rangeId) {
 
 // ---------- Погода ----------
 function computeWeather(range) {
+  const peak = range.currentPeak;
+  if (range.type === 'expedition' && peak.deadline && !peak.completed) {
+    const remainingHeight = Math.max(0, peak.totalHeight - peak.currentHeight);
+    const daysRemaining = Math.max(1, daysBetweenDates(todayStr(), peak.deadline));
+    const requiredPace = remainingHeight / daysRemaining;
+    let sum = 0;
+    for (let i = 0; i < 7; i++) {
+      const ds = shiftDate(todayStr(), -i);
+      const day = state.dailyLog[ds];
+      if (day) sum += (day.perRange[range.id] || 0);
+    }
+    const avgActual = sum / 7;
+    const ratio = remainingHeight <= 0 ? 2 : (requiredPace > 0 ? avgActual / requiredPace : 1);
+    if (ratio >= 1.15) return { emoji: '☀️', label: 'ясно' };
+    if (ratio >= 0.85) return { emoji: '⛅', label: 'переменно' };
+    if (ratio >= 0.5) return { emoji: '☁️', label: 'облачно' };
+    return { emoji: '⛈️', label: 'шторм' };
+  }
   const ref = REFERENCE_PACE * range.difficulty;
   let sum = 0;
   for (let i = 0; i < 7; i++) {
@@ -210,12 +281,24 @@ function processDayClose(dateStr) {
 function runDailyRollover() {
   const today = todayStr();
   let cursor = state.lastRolloverDate || today;
-  if (cursor === today) { state.lastRolloverDate = today; return; }
+  if (cursor === today) { state.lastRolloverDate = today; checkExpeditionDeadlines(); return; }
   while (cursor < today) {
     processDayClose(cursor);
     cursor = shiftDate(cursor, 1);
   }
   state.lastRolloverDate = today;
+  checkExpeditionDeadlines();
+}
+
+function checkExpeditionDeadlines() {
+  const today = todayStr();
+  state.ranges.forEach(r => {
+    const peak = r.currentPeak;
+    if (r.type === 'expedition' && peak.deadline && !peak.completed && today > peak.deadline) {
+      peak.deadline = null;
+      r.type = 'regular';
+    }
+  });
 }
 
 // ---------- Магазин ----------
@@ -260,7 +343,16 @@ function toggleCheckQuest(q) {
   }
   persist(); renderAll();
   animateCheckbox(q.id);
-  if (signal && signal.campReached) { showToast('⛺ Новый лагерь!'); pulseRangeCard(signal.rangeId); }
+  if (signal) {
+    if (signal.campReached || signal.unlocked.length) pulseRangeCard(signal.rangeId);
+    if (signal.unlocked.length) {
+      const names = signal.unlocked.map(p => p.name).join(', ');
+      const tokens = signal.unlocked.reduce((s, p) => s + p.tokens, 0);
+      showToast(`🚩 ${names} покорён! +${tokens}`);
+    } else if (signal.campReached) {
+      showToast('⛺ Новый лагерь!');
+    }
+  }
 }
 
 function promptCounterInput(q) {
@@ -277,7 +369,16 @@ function promptCounterInput(q) {
   state.tokens = Math.max(0, state.tokens + xpDelta);
   if (val > 0) registerActivityToday();
   persist(); renderAll();
-  if (signal && signal.campReached) { showToast('⛺ Новый лагерь!'); pulseRangeCard(signal.rangeId); }
+  if (signal) {
+    if (signal.campReached || signal.unlocked.length) pulseRangeCard(signal.rangeId);
+    if (signal.unlocked.length) {
+      const names = signal.unlocked.map(p => p.name).join(', ');
+      const tokens = signal.unlocked.reduce((s, p) => s + p.tokens, 0);
+      showToast(`🚩 ${names} покорён! +${tokens}`);
+    } else if (signal.campReached) {
+      showToast('⛺ Новый лагерь!');
+    }
+  }
 }
 
 /* =====================================================================
@@ -356,14 +457,19 @@ function renderRanges() {
     const card = document.createElement('div');
     card.className = 'range-card';
     card.dataset.rangeId = r.id;
+    const metaText = (peak.deadline && !peak.completed)
+      ? `${peak.currentHeight} / ${peak.totalHeight} м · ${Math.max(0, daysBetweenDates(todayStr(), peak.deadline))} дн. до дедлайна`
+      : peak.completed
+        ? `✅ Экспедиция завершена · ${peak.totalHeight} м`
+        : `${peak.currentHeight} / ${peak.totalHeight} м · лагерь ${reachedCamps} из ${peak.camps.length}`;
     card.innerHTML = `
       <div class="range-card__head">
-        <span class="range-card__icon">${r.icon}</span>
+        <span class="range-card__icon">${r.icon}${r.type === 'expedition' ? ' 🎯' : ''}</span>
         <span class="range-card__title">${escapeHtml(r.title)}</span>
         <span class="range-card__weather">${weather.emoji}</span>
       </div>
       ${renderRouteSvg(peak)}
-      <div class="range-card__meta">${peak.currentHeight} / ${peak.totalHeight} м · лагерь ${reachedCamps} из ${peak.camps.length}</div>`;
+      <div class="range-card__meta">${metaText}</div>`;
     card.addEventListener('click', () => openPeakOverlay(r.id));
     wrap.appendChild(card);
   });
@@ -480,6 +586,8 @@ function openPeakOverlay(rangeId) {
   currentPeakRangeId = rangeId;
   const r = getRange(rangeId);
   if (!r) return;
+  const retroUnlocked = checkAchievements(r);
+  if (retroUnlocked.length) persist();
   document.getElementById('peakRangeTitle').textContent = `${r.icon} ${r.title}`;
   const weather = computeWeather(r);
   document.getElementById('peakWeather').textContent = `${weather.emoji} ${weather.label}`;
@@ -501,11 +609,53 @@ function openPeakOverlay(rangeId) {
     </div>`;
   });
   document.getElementById('peakRoute').innerHTML = html;
-  document.getElementById('peakMeta').textContent =
-    `${peak.currentHeight} из ${peak.totalHeight} м · сложность ×${r.difficulty} · карьерная высота ${r.careerHeight} м`;
+  document.getElementById('peakMeta').textContent = peak.completed
+    ? `✅ Экспедиция завершена · ${peak.totalHeight} м · карьерная высота ${r.careerHeight} м`
+    : `${peak.currentHeight} из ${peak.totalHeight} м · сложность ×${r.difficulty} · карьерная высота ${r.careerHeight} м` +
+      (peak.deadline ? ` · дедлайн ${peak.deadline} (${Math.max(0, daysBetweenDates(todayStr(), peak.deadline))} дн.)` : '');
+  document.getElementById('btnLeavePeak').hidden = !!peak.completed;
+  renderPeakAchievements(r);
+  renderPeakHistory(r);
   document.getElementById('peakOverlay').hidden = false;
 }
+function renderPeakAchievements(range) {
+  const wrap = document.getElementById('peakAchievements');
+  const items = SEVEN_SUMMITS.map(peak => {
+    const unlocked = !!range.achievements[peak.key];
+    return `<div class="peak-achv__item ${unlocked ? 'is-unlocked' : ''}" title="${peak.name} · ${peak.continent} · ${peak.height} м">
+      <span>${unlocked ? '🚩' : '⛰️'}</span><span class="h">${peak.height}</span>
+    </div>`;
+  }).join('');
+  wrap.innerHTML = `<div class="peak-achv__title">Seven Summits</div><div class="peak-achv__grid">${items}</div>`;
+}
+
 function closePeakOverlay() { document.getElementById('peakOverlay').hidden = true; }
+
+function renderPeakHistory(range) {
+  const wrap = document.getElementById('peakHistory');
+  const history = range.history || [];
+  if (history.length === 0) {
+    wrap.innerHTML = `<div class="peak-history__title">История</div><div class="peak-history__empty">Пока пусто — это первая вершина хребта.</div>`;
+    return;
+  }
+  const summaryBySize = {};
+  history.forEach(h => {
+    if (!summaryBySize[h.size]) summaryBySize[h.size] = { summited: 0, abandoned: 0 };
+    summaryBySize[h.size][h.outcome === 'summited' ? 'summited' : 'abandoned']++;
+  });
+  const summaryHtml = Object.keys(summaryBySize).map(size => {
+    const s = summaryBySize[size];
+    return `<span class="peak-history__chip">${SIZE_DEFS[size].label}: ${s.summited} 🏁 · ${s.abandoned} 🚩</span>`;
+  }).join('');
+  const listHtml = history.slice().reverse().map(h => {
+    const icon = h.outcome === 'summited' ? '🏁' : '🚩';
+    const label = h.outcome === 'summited' ? `${SIZE_DEFS[h.size].label} покорена` : `${SIZE_DEFS[h.size].label} оставлена`;
+    return `<div class="peak-history__item"><span class="peak-history__icon">${icon}</span><span class="peak-history__label">${label}</span><span class="peak-history__meta">${h.finishedAtHeight} м · ${h.date}</span></div>`;
+  }).join('');
+  wrap.innerHTML = `<div class="peak-history__title">История</div>
+    <div class="peak-history__summary">${summaryHtml}</div>
+    <div class="peak-history__list">${listHtml}</div>`;
+}
 
 /* =====================================================================
    ФОРМЫ И UI-ВЗАИМОДЕЙСТВИЕ
@@ -528,18 +678,27 @@ function resetSegmented(containerId, attr, value) {
 }
 
 // ---- Создание хребта ----
-let selectedRangeIcon = ICONS[0], selectedDifficulty = 1, selectedSize = 'week';
+let selectedRangeIcon = ICONS[0], selectedDifficulty = 1, selectedSize = 'week', selectedRangeType = 'regular';
 
 function openRangeOverlay() {
   document.getElementById('rangeTitle').value = '';
-  selectedRangeIcon = ICONS[0]; selectedDifficulty = 1; selectedSize = 'week';
+  document.getElementById('expeditionDeadline').value = '';
+  selectedRangeIcon = ICONS[0]; selectedDifficulty = 1; selectedSize = 'week'; selectedRangeType = 'regular';
   buildIconGrid('rangeIconGrid', ic => selectedRangeIcon = ic, selectedRangeIcon);
   resetSegmented('rangeDifficulty', 'diff', 1);
   resetSegmented('rangeSize', 'size', 'week');
+  resetSegmented('rangeType', 'type', 'regular');
+  document.getElementById('expeditionDateField').hidden = true;
   document.getElementById('rangeOverlay').hidden = false;
 }
 document.getElementById('btnAddRange').addEventListener('click', openRangeOverlay);
 document.getElementById('btnCancelRange').addEventListener('click', () => { document.getElementById('rangeOverlay').hidden = true; });
+document.getElementById('rangeType').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  resetSegmented('rangeType', 'type', btn.dataset.type);
+  selectedRangeType = btn.dataset.type;
+  document.getElementById('expeditionDateField').hidden = selectedRangeType !== 'expedition';
+});
 document.getElementById('rangeDifficulty').addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
   resetSegmented('rangeDifficulty', 'diff', btn.dataset.diff);
@@ -554,7 +713,13 @@ document.getElementById('rangeForm').addEventListener('submit', e => {
   e.preventDefault();
   const title = document.getElementById('rangeTitle').value.trim();
   if (!title) return;
-  createRange({ title, icon: selectedRangeIcon, difficulty: selectedDifficulty, size: selectedSize });
+  let deadline = null;
+  if (selectedRangeType === 'expedition') {
+    deadline = document.getElementById('expeditionDeadline').value;
+    if (!deadline) { showToast('Укажи дату дедлайна'); return; }
+    if (deadline <= todayStr()) { showToast('Дедлайн должен быть в будущем'); return; }
+  }
+  createRange({ title, icon: selectedRangeIcon, difficulty: selectedDifficulty, size: selectedSize, type: selectedRangeType, deadline });
   document.getElementById('rangeOverlay').hidden = true;
 });
 
