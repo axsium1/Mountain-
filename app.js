@@ -1,0 +1,731 @@
+/* =====================================================================
+   MOUNTAIN — основная логика
+   ===================================================================== */
+
+// ---------- Константы ----------
+const SIZE_DEFS = {
+  week:      { label: 'Недельная',   camps: 3,  totalHeight: 180 },
+  month:     { label: 'Месячная',    camps: 6,  totalHeight: 750 },
+  half_year: { label: 'Полугодовая', camps: 12, totalHeight: 4500 },
+};
+const SIZE_ORDER = ['week', 'month', 'half_year'];
+
+const DIFFICULTY_XP = { easy: 10, medium: 25, hard: 50, epic: 100 };
+const DIFF_LABELS   = { easy: 'Лёгкий', medium: 'Средний', hard: 'Сложный', epic: 'Эпик' };
+const REFERENCE_PACE = 25; // м/день при "1 среднее задание в день"
+
+const RANKS = [
+  { name: 'Новичок', min: 0 },
+  { name: 'Турист', min: 500 },
+  { name: 'Скалолаз', min: 1500 },
+  { name: 'Высотник', min: 4000 },
+  { name: 'Альпинист', min: 9000 },
+  { name: 'Покоритель вершин', min: 20000 },
+  { name: 'Легенда гор', min: 45000 },
+];
+
+const COFFEE_COST = 150;
+const COFFEE_WEEKLY_LIMIT = 2;
+
+const ICONS = ['📖','🔤','💻','📚','🏃','🧘','🎸','🎨','✍️','🧠','💪','🗣️','🔬','🎯','⏱️','🌱','🍎','💧','🛌','📐','🧩','🎧','🖌️','🧪','🗂️','📈','🧗','🚴','🏊','🥗'];
+
+// ---------- Состояние ----------
+function defaultState() {
+  return {
+    version: 1,
+    tokens: 0,
+    coffeeInventory: 0,
+    streak: { current: 0, longest: 0, lastActiveDate: null },
+    ranges: [],
+    quests: [],
+    dailyLog: {},
+    purchases: {},
+    lastRolloverDate: null,
+  };
+}
+let state = defaultState();
+let db = null;
+let useFirestore = false;
+let firebaseUser = null;
+let unsubscribeSnapshot = null;
+
+// ---------- Хелперы дат ----------
+function todayStr(d = new Date()) {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+function shiftDate(dateStr, deltaDays) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + deltaDays);
+  return todayStr(d);
+}
+function isoWeekKey(d = new Date()) {
+  const date = new Date(d.getTime());
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7));
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  const weekNum = 1 + Math.round(((date - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+  return `${date.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+
+function ensureDay(dateStr) {
+  if (!state.dailyLog[dateStr]) state.dailyLog[dateStr] = { perRange: {}, quests: {} };
+  return state.dailyLog[dateStr];
+}
+function getRange(id) { return state.ranges.find(r => r.id === id); }
+
+// ---------- Персистентность ----------
+function localLoad() {
+  try { const raw = localStorage.getItem('mountain_state'); return raw ? JSON.parse(raw) : null; }
+  catch (e) { return null; }
+}
+function localSave(s) {
+  try { localStorage.setItem('mountain_state', JSON.stringify(s)); } catch (e) {}
+}
+function persist() {
+  localSave(state);
+  if (useFirestore && firebaseUser && db) {
+    db.collection('users').doc(firebaseUser.uid).set(state).catch(console.error);
+  }
+}
+
+// ---------- Вершины ----------
+function makePeak(size, difficulty) {
+  const def = SIZE_DEFS[size];
+  const totalHeight = Math.round(def.totalHeight * difficulty);
+  const camps = [];
+  for (let i = 1; i <= def.camps; i++) camps.push(Math.round((totalHeight * i) / def.camps));
+  return { size, totalHeight, camps, checkpointHeight: 0, currentHeight: 0, createdAt: todayStr() };
+}
+
+function createRange({ title, icon, difficulty, size }) {
+  const range = {
+    id: uid(), title, icon, difficulty, type: 'regular',
+    careerHeight: 0,
+    achievements: {},
+    currentPeak: makePeak(size, difficulty),
+  };
+  state.ranges.push(range);
+  persist(); renderAll();
+  showToast(`Хребет «${title}» создан`);
+}
+
+function summitPeak(range) {
+  const finished = range.currentPeak.totalHeight;
+  const idx = SIZE_ORDER.indexOf(range.currentPeak.size);
+  const nextSize = SIZE_ORDER[Math.min(idx + 1, SIZE_ORDER.length - 1)];
+  showToast(`🏁 Вершина покорена · ${finished} м`);
+  range.currentPeak = makePeak(nextSize, range.difficulty);
+}
+
+function addHeight(rangeId, delta) {
+  const range = getRange(rangeId);
+  if (!range) return;
+  const peak = range.currentPeak;
+  peak.currentHeight = Math.max(peak.checkpointHeight, peak.currentHeight + delta);
+  range.careerHeight = Math.max(0, (range.careerHeight || 0) + delta);
+
+  if (delta > 0) {
+    peak.camps.forEach(threshold => {
+      if (peak.currentHeight >= threshold && threshold > peak.checkpointHeight) {
+        peak.checkpointHeight = threshold;
+      }
+    });
+    if (peak.currentHeight >= peak.totalHeight) summitPeak(range);
+  }
+
+  const day = ensureDay(todayStr());
+  day.perRange[rangeId] = (day.perRange[rangeId] || 0) + delta;
+}
+
+function leavePeak(rangeId) {
+  const range = getRange(rangeId);
+  if (!range) return;
+  range.currentPeak = makePeak(range.currentPeak.size, range.difficulty);
+  persist(); renderAll(); closePeakOverlay();
+  showToast('Вершина оставлена — начинаем новую');
+}
+
+// ---------- Погода ----------
+function computeWeather(range) {
+  const ref = REFERENCE_PACE * range.difficulty;
+  let sum = 0;
+  for (let i = 0; i < 7; i++) {
+    const ds = shiftDate(todayStr(), -i);
+    const day = state.dailyLog[ds];
+    if (day) sum += (day.perRange[range.id] || 0);
+  }
+  const avg = sum / 7;
+  const ratio = ref > 0 ? avg / ref : 1;
+  if (ratio >= 1.15) return { emoji: '☀️', label: 'ясно' };
+  if (ratio >= 0.85) return { emoji: '⛅', label: 'переменно' };
+  if (ratio >= 0.5) return { emoji: '☁️', label: 'облачно' };
+  return { emoji: '⛈️', label: 'шторм' };
+}
+
+// ---------- Стрик и суточный откат ----------
+function registerActivityToday() {
+  const today = todayStr();
+  if (state.streak.lastActiveDate === today) return;
+  const yesterday = shiftDate(today, -1);
+  if (state.streak.lastActiveDate === yesterday || state.streak.lastActiveDate === null) {
+    state.streak.current += 1;
+  } else {
+    state.streak.current = 1;
+  }
+  state.streak.lastActiveDate = today;
+  state.streak.longest = Math.max(state.streak.longest, state.streak.current);
+}
+
+function processDayClose(dateStr) {
+  const day = state.dailyLog[dateStr] || { perRange: {}, quests: {} };
+  const globalActivity = Object.values(day.perRange).some(v => v > 0);
+  const idleRanges = state.ranges.filter(r =>
+    (day.perRange[r.id] || 0) <= 0 && r.currentPeak.currentHeight > r.currentPeak.checkpointHeight
+  );
+  const needsProtection = !globalActivity || idleRanges.length > 0;
+
+  let protectedByCoffee = false;
+  if (needsProtection && state.coffeeInventory > 0) {
+    state.coffeeInventory -= 1;
+    protectedByCoffee = true;
+  }
+
+  if (!globalActivity && !protectedByCoffee) {
+    state.streak.current = 0;
+  }
+  if (!protectedByCoffee) {
+    idleRanges.forEach(r => { r.currentPeak.currentHeight = r.currentPeak.checkpointHeight; });
+  }
+}
+
+function runDailyRollover() {
+  const today = todayStr();
+  let cursor = state.lastRolloverDate || today;
+  if (cursor === today) { state.lastRolloverDate = today; return; }
+  while (cursor < today) {
+    processDayClose(cursor);
+    cursor = shiftDate(cursor, 1);
+  }
+  state.lastRolloverDate = today;
+}
+
+// ---------- Магазин ----------
+function buyCoffee() {
+  if (state.ranges.length === 0) return showToast('Сначала создай хребет');
+  if (state.tokens < COFFEE_COST) return showToast('Не хватает токенов');
+  const wk = isoWeekKey();
+  const used = state.purchases[wk] || 0;
+  if (used >= COFFEE_WEEKLY_LIMIT) return showToast('Лимит на эту неделю исчерпан');
+  const atCamp = state.ranges.some(r => r.currentPeak.currentHeight === r.currentPeak.checkpointHeight);
+  if (!atCamp) return showToast('Нужно стоять в лагере хотя бы в одном хребте');
+
+  state.tokens -= COFFEE_COST;
+  state.purchases[wk] = used + 1;
+  state.coffeeInventory += 1;
+  persist(); renderAll();
+  showToast('Кофе куплен ☕');
+}
+
+// ---------- Ранг ----------
+function computeRank() {
+  const total = state.ranges.reduce((s, r) => s + (r.careerHeight || 0), 0);
+  let idx = 0;
+  for (let i = 0; i < RANKS.length; i++) if (total >= RANKS[i].min) idx = i;
+  return { total, current: RANKS[idx], next: RANKS[idx + 1] || null };
+}
+
+// ---------- Задания: отметка выполнения ----------
+function toggleCheckQuest(q) {
+  const day = ensureDay(todayStr());
+  const xp = DIFFICULTY_XP[q.difficulty];
+  if (day.quests[q.id]) {
+    day.quests[q.id] = false;
+    addHeight(q.rangeId, -xp);
+    state.tokens = Math.max(0, state.tokens - xp);
+  } else {
+    day.quests[q.id] = true;
+    addHeight(q.rangeId, xp);
+    state.tokens += xp;
+    registerActivityToday();
+  }
+  persist(); renderAll();
+}
+
+function promptCounterInput(q) {
+  const day = ensureDay(todayStr());
+  const current = day.quests[q.id] || 0;
+  const input = window.prompt(`${q.title} — сколько сделано сегодня? (${q.unit || ''})`, current);
+  if (input === null) return;
+  const val = Math.max(0, parseFloat(String(input).replace(',', '.')) || 0);
+  const delta = val - current;
+  if (delta === 0) return;
+  day.quests[q.id] = val;
+  const xpDelta = Math.round(delta * q.xpPerUnit);
+  addHeight(q.rangeId, xpDelta);
+  state.tokens = Math.max(0, state.tokens + xpDelta);
+  if (val > 0) registerActivityToday();
+  persist(); renderAll();
+}
+
+/* =====================================================================
+   РЕНДЕР
+   ===================================================================== */
+function renderAll() {
+  renderHeader();
+  renderRanges();
+  renderQuests();
+  renderShop();
+  renderCalendar();
+}
+
+function renderHeader() {
+  const { total, current, next } = computeRank();
+  document.getElementById('rankName').textContent = current.name;
+  document.getElementById('rankHeight').textContent = total + ' м';
+  const span = next ? (next.min - current.min) : 1;
+  const progress = next ? Math.min(1, (total - current.min) / span) : 1;
+  document.getElementById('rankFill').style.width = (progress * 100) + '%';
+
+  const today = todayStr();
+  const circle = document.getElementById('streakCircle');
+  circle.classList.toggle('is-thawed', state.streak.lastActiveDate === today);
+  document.getElementById('streakNum').textContent = state.streak.current;
+}
+
+function renderRouteSvg(peak) {
+  const n = peak.camps.length;
+  const pts = [[8, 40]];
+  for (let i = 1; i <= n; i++) {
+    const x = 8 + (104 / n) * i;
+    const y = 40 - (32 / n) * i - (i % 2 === 0 ? 0 : 4);
+    pts.push([x, y]);
+  }
+  const line = pts.map(p => p.join(',')).join(' ');
+  let circles = '';
+  pts.forEach((p, i) => {
+    if (i === 0) return;
+    const threshold = peak.camps[i - 1];
+    const reached = threshold <= peak.checkpointHeight;
+    const isCurrentBand = !reached && (peak.camps[i - 2] || 0) <= peak.checkpointHeight;
+    const r = isCurrentBand ? 4.5 : 3.5;
+    const fill = reached ? 'var(--accent-xp)' : 'transparent';
+    const stroke = (reached || isCurrentBand) ? 'var(--accent-xp)' : 'var(--line)';
+    circles += `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" style="fill:${fill};stroke:${stroke};stroke-width:1.5"/>`;
+  });
+  return `<svg class="range-card__svg" viewBox="0 0 120 48"><polyline points="${line}" style="fill:none;stroke:var(--line);stroke-width:1.5"/>${circles}</svg>`;
+}
+
+function renderRanges() {
+  const wrap = document.getElementById('rangeScroll');
+  wrap.innerHTML = '';
+  state.ranges.forEach(r => {
+    const peak = r.currentPeak;
+    const reachedCamps = peak.camps.filter(c => c <= peak.checkpointHeight).length;
+    const weather = computeWeather(r);
+    const card = document.createElement('div');
+    card.className = 'range-card';
+    card.innerHTML = `
+      <div class="range-card__head">
+        <span class="range-card__icon">${r.icon}</span>
+        <span class="range-card__title">${escapeHtml(r.title)}</span>
+        <span class="range-card__weather">${weather.emoji}</span>
+      </div>
+      ${renderRouteSvg(peak)}
+      <div class="range-card__meta">${peak.currentHeight} / ${peak.totalHeight} м · лагерь ${reachedCamps} из ${peak.camps.length}</div>`;
+    card.addEventListener('click', () => openPeakOverlay(r.id));
+    wrap.appendChild(card);
+  });
+  const addCard = document.createElement('button');
+  addCard.type = 'button';
+  addCard.className = 'range-add-card';
+  addCard.textContent = '+';
+  addCard.addEventListener('click', openRangeOverlay);
+  wrap.appendChild(addCard);
+}
+
+function renderQuests() {
+  const wrap = document.getElementById('questListWrap');
+  const today = todayStr();
+  const day = state.dailyLog[today] || { quests: {} };
+  const active = state.quests.filter(q => !q.archived);
+
+  if (active.length === 0) {
+    wrap.innerHTML = `<div class="empty-state">
+      <div class="empty-state__icon">🗻</div>
+      <div class="empty-state__title">Заданий пока нет</div>
+      <div class="empty-state__text">Добавь первое — это займёт 10 секунд.</div>
+      <button type="button" class="btn-primary" id="emptyAddQuest">+ Добавить задание</button>
+    </div>`;
+    document.getElementById('emptyAddQuest').addEventListener('click', openQuestOverlay);
+    return;
+  }
+
+  wrap.innerHTML = '<div class="quest-list">' + active.map(q => {
+    const range = getRange(q.rangeId);
+    const isCheck = q.kind === 'check';
+    let doneToday, metaExtra, xpLabel, progressPct = 0;
+    if (isCheck) {
+      doneToday = !!day.quests[q.id];
+      xpLabel = '+' + DIFFICULTY_XP[q.difficulty];
+      metaExtra = '';
+    } else {
+      const val = day.quests[q.id] || 0;
+      doneToday = val >= q.target;
+      metaExtra = ` · ${val}/${q.target} ${escapeHtml(q.unit || '')}`;
+      xpLabel = '+' + Math.round(q.xpPerUnit * q.target);
+      progressPct = Math.min(100, Math.round((val / q.target) * 100));
+    }
+    return `<div class="quest-card ${doneToday ? 'is-done' : ''}" data-id="${q.id}">
+      <div class="quest-card__icon">${q.icon}</div>
+      <div class="quest-card__body">
+        <div class="quest-card__title">${escapeHtml(q.title)}</div>
+        <div class="quest-card__meta">${range ? escapeHtml(range.title) : ''}${metaExtra}</div>
+      </div>
+      ${isCheck
+        ? `<div class="checkbox ${doneToday ? 'is-checked' : ''}"><svg viewBox="0 0 24 24" style="fill:none;stroke:white;stroke-width:3"><path d="M4 12l6 6L20 6"/></svg></div>`
+        : `<div class="quest-card__progress"><div class="quest-card__progress-fill" style="width:${progressPct}%"></div></div>`}
+      <div class="quest-card__xp">${xpLabel}</div>
+    </div>`;
+  }).join('') + '</div>';
+
+  wrap.querySelectorAll('.quest-card').forEach(el => {
+    el.addEventListener('click', () => {
+      const q = active.find(x => x.id === el.dataset.id);
+      if (!q) return;
+      if (q.kind === 'check') toggleCheckQuest(q);
+      else promptCounterInput(q);
+    });
+  });
+}
+
+function renderShop() {
+  document.getElementById('tokenBalance').textContent = state.tokens;
+  const wk = isoWeekKey();
+  const used = state.purchases[wk] || 0;
+  document.getElementById('coffeeLimitLabel').textContent = `${used} / ${COFFEE_WEEKLY_LIMIT} на этой неделе`;
+  const btn = document.getElementById('btnBuyCoffee');
+  const atCamp = state.ranges.some(r => r.currentPeak.currentHeight === r.currentPeak.checkpointHeight);
+  btn.disabled = used >= COFFEE_WEEKLY_LIMIT || state.tokens < COFFEE_COST || !atCamp || state.ranges.length === 0;
+}
+
+function renderCalendar() {
+  const now = new Date();
+  const label = now.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  document.getElementById('calMonthLabel').textContent = label.charAt(0).toUpperCase() + label.slice(1);
+
+  const year = now.getFullYear(), month = now.getMonth();
+  const startOffset = (new Date(year, month, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayS = todayStr();
+  const dailyQuestIds = state.quests.filter(q => q.repeat === 'daily' && !q.archived).map(q => q.id);
+
+  let html = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => `<div class="cal-dow">${d}</div>`).join('');
+  for (let i = 0; i < startOffset; i++) html += `<div class="cal-cell is-empty"></div>`;
+
+  let perfectCount = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const day = state.dailyLog[ds];
+    const hasActivity = day && Object.values(day.perRange || {}).some(v => v > 0);
+    const isPerfect = day && dailyQuestIds.length > 0 && dailyQuestIds.every(id => day.quests[id]);
+    if (isPerfect) perfectCount++;
+    const cls = ['cal-cell'];
+    if (hasActivity) cls.push('has-activity');
+    if (isPerfect) cls.push('is-perfect');
+    if (ds === todayS) cls.push('is-today');
+    const style = hasActivity ? `style="background:var(--accent-xp);border-color:var(--accent-xp)"` : '';
+    html += `<div class="${cls.join(' ')}" ${style}>${d}</div>`;
+  }
+  document.getElementById('calGrid').innerHTML = html;
+  document.getElementById('statCurrentStreak').textContent = state.streak.current;
+  document.getElementById('statLongestStreak').textContent = state.streak.longest;
+  document.getElementById('statPerfectDays').textContent = perfectCount;
+}
+
+// ---------- Вершина: экран деталей ----------
+let currentPeakRangeId = null;
+function openPeakOverlay(rangeId) {
+  currentPeakRangeId = rangeId;
+  const r = getRange(rangeId);
+  if (!r) return;
+  document.getElementById('peakRangeTitle').textContent = `${r.icon} ${r.title}`;
+  const weather = computeWeather(r);
+  document.getElementById('peakWeather').textContent = `${weather.emoji} ${weather.label}`;
+  const peak = r.currentPeak;
+  let html = '';
+  peak.camps.forEach((threshold, i) => {
+    const reached = threshold <= peak.checkpointHeight;
+    const isCurrent = !reached && (peak.camps[i - 1] || 0) <= peak.checkpointHeight;
+    html += `<div class="peak-camp ${reached ? 'is-reached' : ''} ${isCurrent ? 'is-current' : ''}">
+      <div class="peak-camp__dot"></div>
+      <div class="peak-camp__label">Лагерь ${i + 1}</div>
+      <div class="peak-camp__height">${threshold} м</div>
+    </div>`;
+  });
+  document.getElementById('peakRoute').innerHTML = html;
+  document.getElementById('peakMeta').textContent =
+    `${peak.currentHeight} из ${peak.totalHeight} м · сложность ×${r.difficulty} · карьерная высота ${r.careerHeight} м`;
+  document.getElementById('peakOverlay').hidden = false;
+}
+function closePeakOverlay() { document.getElementById('peakOverlay').hidden = true; }
+
+/* =====================================================================
+   ФОРМЫ И UI-ВЗАИМОДЕЙСТВИЕ
+   ===================================================================== */
+function buildIconGrid(containerId, onSelect, defaultIcon) {
+  const grid = document.getElementById(containerId);
+  grid.innerHTML = ICONS.map(ic => `<button type="button" class="icon-opt ${ic === defaultIcon ? 'is-selected' : ''}" data-icon="${ic}">${ic}</button>`).join('');
+  grid.querySelectorAll('.icon-opt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      grid.querySelectorAll('.icon-opt').forEach(b => b.classList.remove('is-selected'));
+      btn.classList.add('is-selected');
+      onSelect(btn.dataset.icon);
+    });
+  });
+}
+function resetSegmented(containerId, attr, value) {
+  document.getElementById(containerId).querySelectorAll('button').forEach(b => {
+    b.classList.toggle('is-active', b.dataset[attr] === String(value));
+  });
+}
+
+// ---- Создание хребта ----
+let selectedRangeIcon = ICONS[0], selectedDifficulty = 1, selectedSize = 'week';
+
+function openRangeOverlay() {
+  document.getElementById('rangeTitle').value = '';
+  selectedRangeIcon = ICONS[0]; selectedDifficulty = 1; selectedSize = 'week';
+  buildIconGrid('rangeIconGrid', ic => selectedRangeIcon = ic, selectedRangeIcon);
+  resetSegmented('rangeDifficulty', 'diff', 1);
+  resetSegmented('rangeSize', 'size', 'week');
+  document.getElementById('rangeOverlay').hidden = false;
+}
+document.getElementById('btnAddRange').addEventListener('click', openRangeOverlay);
+document.getElementById('btnCancelRange').addEventListener('click', () => { document.getElementById('rangeOverlay').hidden = true; });
+document.getElementById('rangeDifficulty').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  resetSegmented('rangeDifficulty', 'diff', btn.dataset.diff);
+  selectedDifficulty = parseFloat(btn.dataset.diff);
+});
+document.getElementById('rangeSize').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  resetSegmented('rangeSize', 'size', btn.dataset.size);
+  selectedSize = btn.dataset.size;
+});
+document.getElementById('rangeForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const title = document.getElementById('rangeTitle').value.trim();
+  if (!title) return;
+  createRange({ title, icon: selectedRangeIcon, difficulty: selectedDifficulty, size: selectedSize });
+  document.getElementById('rangeOverlay').hidden = true;
+});
+
+// ---- Создание задания ----
+let selectedQuestIcon = ICONS[0], selectedQuestRangeId = null, selectedQuestType = 'check', selectedQuestDifficulty = 'medium', selectedQuestRepeat = 'daily';
+
+function buildRangePicker() {
+  const grid = document.getElementById('questRangePicker');
+  grid.innerHTML = state.ranges.map(r => `<button type="button" class="icon-opt icon-opt--range ${r.id === selectedQuestRangeId ? 'is-selected' : ''}" data-range-id="${r.id}"><span>${r.icon}</span><span class="icon-opt__label">${escapeHtml(r.title.slice(0, 8))}</span></button>`).join('');
+  grid.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      grid.querySelectorAll('button').forEach(b => b.classList.remove('is-selected'));
+      btn.classList.add('is-selected');
+      selectedQuestRangeId = btn.dataset.rangeId;
+    });
+  });
+}
+function buildDiffGrid() {
+  const grid = document.getElementById('diffGrid');
+  const diffs = ['easy', 'medium', 'hard', 'epic'];
+  grid.innerHTML = diffs.map(d => `<div class="diff-opt ${d === selectedQuestDifficulty ? 'is-selected' : ''}" data-diff="${d}">
+    <span class="diff-opt__name">${DIFF_LABELS[d]}</span><span class="diff-opt__xp">${DIFFICULTY_XP[d]}</span></div>`).join('');
+  grid.querySelectorAll('.diff-opt').forEach(el => {
+    el.addEventListener('click', () => {
+      grid.querySelectorAll('.diff-opt').forEach(x => x.classList.remove('is-selected'));
+      el.classList.add('is-selected');
+      selectedQuestDifficulty = el.dataset.diff;
+    });
+  });
+}
+function openQuestOverlay() {
+  if (state.ranges.length === 0) { showToast('Сначала создай хотя бы один хребет'); return; }
+  document.getElementById('questTitle').value = '';
+  document.getElementById('counterTarget').value = '';
+  document.getElementById('counterUnit').value = '';
+  document.getElementById('counterXpPerUnit').value = 2;
+  selectedQuestIcon = ICONS[0];
+  selectedQuestRangeId = state.ranges[0].id;
+  selectedQuestType = 'check';
+  selectedQuestDifficulty = 'medium';
+  selectedQuestRepeat = 'daily';
+
+  buildIconGrid('iconGrid', ic => selectedQuestIcon = ic, selectedQuestIcon);
+  buildRangePicker();
+  buildDiffGrid();
+  resetSegmented('typeSegmented', 'type', 'check');
+  resetSegmented('repeatSegmented', 'repeat', 'daily');
+  document.getElementById('diffField').hidden = false;
+  document.getElementById('counterField').hidden = true;
+  document.getElementById('questOverlay').hidden = false;
+}
+document.getElementById('btnAddQuest').addEventListener('click', openQuestOverlay);
+document.getElementById('btnCancelQuest').addEventListener('click', () => { document.getElementById('questOverlay').hidden = true; });
+document.getElementById('typeSegmented').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  resetSegmented('typeSegmented', 'type', btn.dataset.type);
+  selectedQuestType = btn.dataset.type;
+  document.getElementById('diffField').hidden = selectedQuestType !== 'check';
+  document.getElementById('counterField').hidden = selectedQuestType !== 'counter';
+});
+document.getElementById('repeatSegmented').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  resetSegmented('repeatSegmented', 'repeat', btn.dataset.repeat);
+  selectedQuestRepeat = btn.dataset.repeat;
+});
+document.getElementById('questForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const title = document.getElementById('questTitle').value.trim();
+  if (!title || !selectedQuestRangeId) return;
+  const quest = { id: uid(), title, icon: selectedQuestIcon, rangeId: selectedQuestRangeId, kind: selectedQuestType, repeat: selectedQuestRepeat, archived: false };
+  if (selectedQuestType === 'check') {
+    quest.difficulty = selectedQuestDifficulty;
+  } else {
+    quest.target = parseFloat(document.getElementById('counterTarget').value) || 10;
+    quest.unit = document.getElementById('counterUnit').value.trim() || 'ед.';
+    quest.xpPerUnit = parseFloat(document.getElementById('counterXpPerUnit').value) || 2;
+  }
+  state.quests.push(quest);
+  persist(); renderAll();
+  document.getElementById('questOverlay').hidden = true;
+});
+
+// ---- Вершина: закрытие / оставить ----
+document.getElementById('btnClosePeak').addEventListener('click', closePeakOverlay);
+document.getElementById('btnLeavePeak').addEventListener('click', () => {
+  if (!currentPeakRangeId) return;
+  if (!confirm('Точно оставить эту вершину? Начнётся новая того же размера с нуля.')) return;
+  leavePeak(currentPeakRangeId);
+});
+
+// ---- Магазин ----
+document.getElementById('btnBuyCoffee').addEventListener('click', buyCoffee);
+
+// ---- Вкладки ----
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('is-active'));
+    btn.classList.add('is-active');
+    ['home', 'shop', 'calendar'].forEach(name => {
+      document.getElementById('screen-' + name).hidden = (name !== btn.dataset.tab);
+    });
+  });
+});
+
+// ---- Тост ----
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('is-visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('is-visible'), 2600);
+}
+
+/* =====================================================================
+   АВТОРИЗАЦИЯ И ЗАПУСК
+   ===================================================================== */
+function translateAuthError(err) {
+  const map = {
+    'auth/email-already-in-use': 'Этот email уже зарегистрирован',
+    'auth/invalid-email': 'Некорректный email',
+    'auth/weak-password': 'Пароль слишком короткий (минимум 6 символов)',
+    'auth/wrong-password': 'Неверный пароль',
+    'auth/user-not-found': 'Аккаунт не найден',
+    'auth/invalid-credential': 'Неверная почта или пароль',
+  };
+  return map[err.code] || 'Что-то пошло не так, попробуй ещё раз';
+}
+
+function wireAuthForm(auth) {
+  let registerMode = false;
+  document.getElementById('authToggle').addEventListener('click', () => {
+    registerMode = !registerMode;
+    document.getElementById('authTitle').textContent = registerMode ? 'Регистрация' : 'Вход';
+    document.getElementById('authSubmit').textContent = registerMode ? 'Зарегистрироваться' : 'Войти';
+    document.getElementById('authToggle').textContent = registerMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться';
+  });
+  document.getElementById('authForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = document.getElementById('authEmail').value.trim();
+    const password = document.getElementById('authPassword').value;
+    const errEl = document.getElementById('authError');
+    errEl.style.display = 'none';
+    try {
+      if (registerMode) await auth.createUserWithEmailAndPassword(email, password);
+      else await auth.signInWithEmailAndPassword(email, password);
+    } catch (err) {
+      errEl.textContent = translateAuthError(err);
+      errEl.style.display = 'block';
+    }
+  });
+}
+
+function revealApp() {
+  document.getElementById('app').hidden = false;
+  document.getElementById('tabBar').hidden = false;
+}
+
+function initAuth() {
+  if (!window.MOUNTAIN_FIREBASE_CONFIGURED) {
+    document.getElementById('authOverlay').hidden = true;
+    state = localLoad() || defaultState();
+    runDailyRollover();
+    persist();
+    revealApp();
+    renderAll();
+    return;
+  }
+  useFirestore = true;
+  db = firebase.firestore();
+  const auth = firebase.auth();
+  wireAuthForm(auth);
+
+  auth.onAuthStateChanged(user => {
+    if (unsubscribeSnapshot) { unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+    if (user) {
+      firebaseUser = user;
+      document.getElementById('authOverlay').hidden = true;
+      let first = true;
+      const ref = db.collection('users').doc(user.uid);
+      unsubscribeSnapshot = ref.onSnapshot(snap => {
+        state = snap.exists ? Object.assign(defaultState(), snap.data()) : defaultState();
+        if (first) {
+          first = false;
+          if (!snap.exists) ref.set(state);
+          runDailyRollover();
+          persist();
+          revealApp();
+        }
+        renderAll();
+      });
+    } else {
+      firebaseUser = null;
+      document.getElementById('authOverlay').hidden = false;
+      document.getElementById('app').hidden = true;
+      document.getElementById('tabBar').hidden = true;
+    }
+  });
+}
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+initAuth();

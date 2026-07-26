@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Mountain</title>
+<meta name="theme-color" content="#0B0D12" />
+<meta name="description" content="Твоя жизнь — горный хребет. Задания, лагеря, вершины." />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Mountain" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ============ AUTH ============ -->
+<div class="overlay" id="authOverlay">
+  <form class="sheet" id="authForm" style="margin-top:auto;margin-bottom:auto;border-radius:22px;max-height:none;">
+    <div class="sheet__handle"></div>
+    <h2 class="sheet__title" id="authTitle">Вход</h2>
+    <div class="field">
+      <label class="field__label" for="authEmail">Почта</label>
+      <input type="email" id="authEmail" required autocomplete="email" />
+    </div>
+    <div class="field">
+      <label class="field__label" for="authPassword">Пароль</label>
+      <input type="password" id="authPassword" required autocomplete="current-password" minlength="6" />
+    </div>
+    <p id="authError" style="color:var(--danger);font-size:12.5px;margin:-6px 0 14px;display:none;"></p>
+    <button type="submit" class="btn-primary" style="width:100%;justify-content:center;margin-bottom:10px;" id="authSubmit">Войти</button>
+    <button type="button" class="btn-secondary" style="width:100%;" id="authToggle">Нет аккаунта? Зарегистрироваться</button>
+    <p style="font-size:11px;color:var(--text-faint);margin-top:14px;text-align:center;" id="authMode">оффлайн-режим · данные хранятся только в этом браузере</p>
+  </form>
+</div>
+
+<div id="app" hidden>
+
+  <header class="header">
+    <div class="rank-badge">
+      <span class="rank-badge__icon">▲</span>
+    </div>
+    <div class="header__stats">
+      <div class="xp-row">
+        <span class="xp-row__title" id="rankName">Новичок</span>
+        <span class="xp-row__value" id="rankHeight">0 м</span>
+      </div>
+      <div class="xp-bar">
+        <div class="xp-bar__fill" id="rankFill"></div>
+        <div class="xp-bar__ticks"></div>
+      </div>
+    </div>
+    <button class="streak-circle" id="streakCircle" title="Стрик">
+      <span class="streak-circle__frost" id="streakFrost"></span>
+      <span class="streak-circle__num" id="streakNum">0</span>
+    </button>
+  </header>
+
+  <!-- ============ ХРЕБТЫ + ЗАДАНИЯ ============ -->
+  <section class="screen" id="screen-home">
+
+    <div class="section-head">
+      <span class="section-head__title">Хребты</span>
+      <button class="btn-add" id="btnAddRange"><span>+</span> Хребет</button>
+    </div>
+    <div class="range-scroll" id="rangeScroll"></div>
+
+    <div class="section-head">
+      <span class="section-head__title">Задания сегодня</span>
+      <button class="btn-add" id="btnAddQuest"><span>+</span> Задание</button>
+    </div>
+    <div id="questListWrap"></div>
+  </section>
+
+  <!-- ============ МАГАЗИН ============ -->
+  <section class="screen" id="screen-shop" hidden>
+    <div class="token-balance">
+      <span class="token-balance__num" id="tokenBalance">0</span>
+      <span class="token-balance__label">токенов</span>
+    </div>
+    <div class="section-head"><span class="section-head__title">Магазин</span></div>
+
+    <div class="shop-item">
+      <div class="shop-item__icon">☕</div>
+      <div class="shop-item__body">
+        <div class="shop-item__title">Горячий кофе</div>
+        <div class="shop-item__desc">Не даёт снегу лечь за сегодня — стрик и чекпоинты в безопасности.</div>
+        <div class="shop-item__limit" id="coffeeLimitLabel">0 / 2 на этой неделе</div>
+      </div>
+      <button class="shop-item__buy" id="btnBuyCoffee">150</button>
+    </div>
+    <p id="coffeeHint" style="font-size:11.5px;color:var(--text-faint);margin-top:-2px;">Купить можно, только когда хотя бы один хребет стоит ровно в лагере.</p>
+
+    <div class="shop-item" style="opacity:.4">
+      <div class="shop-item__icon">✨</div>
+      <div class="shop-item__body">
+        <div class="shop-item__title">Скоро добавим ещё</div>
+        <div class="shop-item__desc">Темы оформления и свои награды.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ КАЛЕНДАРЬ ============ -->
+  <section class="screen" id="screen-calendar" hidden>
+    <div class="section-head"><span class="section-head__title">Календарь</span></div>
+    <div class="cal-month-label" id="calMonthLabel">—</div>
+    <div class="cal-grid" id="calGrid"></div>
+    <div class="cal-stats">
+      <div class="cal-stat"><div class="cal-stat__num" id="statCurrentStreak">0</div><div class="cal-stat__label">Стрик</div></div>
+      <div class="cal-stat"><div class="cal-stat__num" id="statLongestStreak">0</div><div class="cal-stat__label">Рекорд</div></div>
+      <div class="cal-stat"><div class="cal-stat__num" id="statPerfectDays">0</div><div class="cal-stat__label">Идеальных</div></div>
+    </div>
+  </section>
+
+</div>
+
+<nav class="tab-bar" id="tabBar" hidden>
+  <div class="tab-bar__inner">
+    <button class="tab-btn is-active" data-tab="home"><span class="tab-btn__icon">🗻</span>Хребты</button>
+    <button class="tab-btn" data-tab="shop"><span class="tab-btn__icon">🛒</span>Магазин</button>
+    <button class="tab-btn" data-tab="calendar"><span class="tab-btn__icon">📅</span>Календарь</button>
+  </div>
+</nav>
+
+<!-- ============ ВЕРШИНА: ДЕТАЛИ ============ -->
+<div class="overlay" id="peakOverlay" hidden>
+  <div class="sheet" style="max-height:92vh;">
+    <div class="sheet__handle"></div>
+    <div class="section-head" style="margin-top:0;">
+      <span class="sheet__title" id="peakRangeTitle" style="margin:0;">—</span>
+      <button class="btn-secondary" id="btnClosePeak" style="flex:none;padding:8px 12px;">Закрыть</button>
+    </div>
+    <div class="peak-weather" id="peakWeather">—</div>
+    <div class="peak-route" id="peakRoute"></div>
+    <div class="peak-meta" id="peakMeta">—</div>
+    <button class="btn-secondary" id="btnLeavePeak" style="width:100%;margin-top:16px;color:var(--danger);border-color:rgba(255,93,93,0.3);">Оставить эту вершину</button>
+  </div>
+</div>
+
+<!-- ============ СОЗДАТЬ ХРЕБЕТ ============ -->
+<div class="overlay" id="rangeOverlay" hidden>
+  <form class="sheet" id="rangeForm">
+    <div class="sheet__handle"></div>
+    <h2 class="sheet__title">Новый хребет</h2>
+    <div class="field">
+      <label class="field__label" for="rangeTitle">Название</label>
+      <input type="text" id="rangeTitle" placeholder="Например: English" required maxlength="40" />
+    </div>
+    <div class="field">
+      <label class="field__label">Иконка</label>
+      <div class="icon-grid" id="rangeIconGrid"></div>
+    </div>
+    <div class="field">
+      <label class="field__label">Сложность</label>
+      <div class="segmented" id="rangeDifficulty">
+        <button type="button" data-diff="0.7">Легче</button>
+        <button type="button" data-diff="1" class="is-active">Стандарт</button>
+        <button type="button" data-diff="1.3">Тяжелее</button>
+      </div>
+    </div>
+    <div class="field">
+      <label class="field__label">Размер первой вершины</label>
+      <div class="segmented" id="rangeSize">
+        <button type="button" data-size="week" class="is-active">Недельная</button>
+        <button type="button" data-size="month">Месячная</button>
+        <button type="button" data-size="half_year">Полугодовая</button>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="btnCancelRange">Отмена</button>
+      <button type="submit" class="btn-primary" style="justify-content:center">Создать</button>
+    </div>
+  </form>
+</div>
+
+<!-- ============ СОЗДАТЬ/РЕДАКТИРОВАТЬ ЗАДАНИЕ ============ -->
+<div class="overlay" id="questOverlay" hidden>
+  <form class="sheet" id="questForm">
+    <div class="sheet__handle"></div>
+    <h2 class="sheet__title">Новое задание</h2>
+
+    <div class="field">
+      <label class="field__label" for="questTitle">Название</label>
+      <input type="text" id="questTitle" placeholder="Например: Читать 10 страниц" required maxlength="60" />
+    </div>
+
+    <div class="field">
+      <label class="field__label">Хребет</label>
+      <div class="icon-grid" id="questRangePicker" style="grid-template-columns:repeat(4,1fr);"></div>
+    </div>
+
+    <div class="field">
+      <label class="field__label">Иконка</label>
+      <div class="icon-grid" id="iconGrid"></div>
+    </div>
+
+    <div class="field">
+      <label class="field__label">Тип отметки</label>
+      <div class="segmented" id="typeSegmented">
+        <button type="button" data-type="check" class="is-active">Галочка</button>
+        <button type="button" data-type="counter">Счётчик</button>
+      </div>
+    </div>
+
+    <div class="field" id="diffField">
+      <label class="field__label">Сложность</label>
+      <div class="diff-grid" id="diffGrid"></div>
+    </div>
+
+    <div class="field" id="counterField" hidden>
+      <label class="field__label">Дневная цель</label>
+      <div class="counter-row">
+        <div class="field"><input type="number" id="counterTarget" placeholder="10" min="1" /></div>
+        <div class="field"><input type="text" id="counterUnit" placeholder="стр." maxlength="10" /></div>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label class="field__label">XP за единицу</label>
+        <input type="number" id="counterXpPerUnit" placeholder="2" min="1" value="2" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="field__label">Повтор</label>
+      <div class="segmented" id="repeatSegmented">
+        <button type="button" data-repeat="daily" class="is-active">Ежедневно</button>
+        <button type="button" data-repeat="once">Только сегодня</button>
+      </div>
+    </div>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn-secondary" id="btnCancelQuest">Отмена</button>
+      <button type="submit" class="btn-primary" style="justify-content:center">Сохранить</button>
+    </div>
+  </form>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="firebase-init.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
