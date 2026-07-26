@@ -124,22 +124,25 @@ function summitPeak(range) {
 
 function addHeight(rangeId, delta) {
   const range = getRange(rangeId);
-  if (!range) return;
+  if (!range) return { campReached: false, summited: false, rangeId };
   const peak = range.currentPeak;
+  const beforeCheckpoint = peak.checkpointHeight;
   peak.currentHeight = Math.max(peak.checkpointHeight, peak.currentHeight + delta);
   range.careerHeight = Math.max(0, (range.careerHeight || 0) + delta);
 
+  let summited = false;
   if (delta > 0) {
     peak.camps.forEach(threshold => {
       if (peak.currentHeight >= threshold && threshold > peak.checkpointHeight) {
         peak.checkpointHeight = threshold;
       }
     });
-    if (peak.currentHeight >= peak.totalHeight) summitPeak(range);
+    if (peak.currentHeight >= peak.totalHeight) { summitPeak(range); summited = true; }
   }
 
   const day = ensureDay(todayStr());
   day.perRange[rangeId] = (day.perRange[rangeId] || 0) + delta;
+  return { campReached: !summited && peak.checkpointHeight > beforeCheckpoint, summited, rangeId };
 }
 
 function leavePeak(rangeId) {
@@ -243,17 +246,20 @@ function computeRank() {
 function toggleCheckQuest(q) {
   const day = ensureDay(todayStr());
   const xp = DIFFICULTY_XP[q.difficulty];
+  let signal = null;
   if (day.quests[q.id]) {
     day.quests[q.id] = false;
     addHeight(q.rangeId, -xp);
     state.tokens = Math.max(0, state.tokens - xp);
   } else {
     day.quests[q.id] = true;
-    addHeight(q.rangeId, xp);
+    signal = addHeight(q.rangeId, xp);
     state.tokens += xp;
     registerActivityToday();
   }
   persist(); renderAll();
+  animateCheckbox(q.id);
+  if (signal && signal.campReached) { showToast('⛺ Новый лагерь!'); pulseRangeCard(signal.rangeId); }
 }
 
 function promptCounterInput(q) {
@@ -266,10 +272,11 @@ function promptCounterInput(q) {
   if (delta === 0) return;
   day.quests[q.id] = val;
   const xpDelta = Math.round(delta * q.xpPerUnit);
-  addHeight(q.rangeId, xpDelta);
+  const signal = addHeight(q.rangeId, xpDelta);
   state.tokens = Math.max(0, state.tokens + xpDelta);
   if (val > 0) registerActivityToday();
   persist(); renderAll();
+  if (signal && signal.campReached) { showToast('⛺ Новый лагерь!'); pulseRangeCard(signal.rangeId); }
 }
 
 /* =====================================================================
@@ -329,6 +336,7 @@ function renderRanges() {
     const weather = computeWeather(r);
     const card = document.createElement('div');
     card.className = 'range-card';
+    card.dataset.rangeId = r.id;
     card.innerHTML = `
       <div class="range-card__head">
         <span class="range-card__icon">${r.icon}</span>
@@ -634,6 +642,23 @@ function showToast(msg) {
   t.classList.add('is-visible');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('is-visible'), 2600);
+}
+
+// ---- Анимации отклика ----
+function animateCheckbox(questId) {
+  const box = document.querySelector(`.quest-card[data-id="${questId}"] .checkbox`);
+  if (!box) return;
+  box.classList.remove('is-pop');
+  void box.offsetWidth; // форс-reflow, чтобы анимация перезапустилась
+  box.classList.add('is-pop');
+}
+function pulseRangeCard(rangeId) {
+  const card = document.querySelector(`.range-card[data-range-id="${rangeId}"]`);
+  if (!card) return;
+  card.classList.remove('is-pulse');
+  void card.offsetWidth;
+  card.classList.add('is-pulse');
+  setTimeout(() => card.classList.remove('is-pulse'), 750);
 }
 
 /* =====================================================================
