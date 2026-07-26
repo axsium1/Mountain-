@@ -877,3 +877,94 @@ a { color: inherit; }
 .xp-bar__fill { transition: width .6s cubic-bezier(.2,.8,.2,1); }
 
 .toast { transition: opacity .25s ease, transform .25s cubic-bezier(.2,.8,.2,1); }
+
+/* ============================================================
+   Топографический фон
+   ============================================================ */
+body {
+  background-image:
+    repeating-radial-gradient(circle at 18% 25%, rgba(255,255,255,0.028) 0 1px, transparent 1px 40px),
+    repeating-radial-gradient(circle at 82% 78%, rgba(255,255,255,0.022) 0 1px, transparent 1px 48px);
+  background-attachment: fixed;
+}
+
+/* Маршрут на карточке хребта — прочерчивается */
+.range-card__svg polyline {
+  stroke-dasharray: 300;
+  stroke-dashoffset: 300;
+  animation: drawRoute .7s ease forwards;
+}
+.range-card__svg circle {
+  opacity: 0;
+  animation: dotFadeIn .35s ease forwards;
+  animation-delay: .45s;
+}
+@keyframes drawRoute { to { stroke-dashoffset: 0; } }
+@keyframes dotFadeIn { to { opacity: 1; } }
+
+/* Погодное свечение на экране вершины */
+.sheet { position: relative; }
+.sheet.weather-clear::before,
+.sheet.weather-partly::before,
+.sheet.weather-cloudy::before,
+.sheet.weather-storm::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+}
+.sheet.weather-clear::before  { background: radial-gradient(circle at 50% 0%, rgba(255,196,80,.09), transparent 60%); }
+.sheet.weather-partly::before { background: radial-gradient(circle at 50% 0%, rgba(124,92,255,.05), transparent 60%); }
+.sheet.weather-cloudy::before { background: radial-gradient(circle at 50% 0%, rgba(140,150,165,.06), transparent 60%); }
+.sheet.weather-storm::before  { background: radial-gradient(circle at 50% 0%, rgba(255,93,93,.08), transparent 60%); }
+.sheet > * { position: relative; z-index: 1; }
+
+/* Каскад лагерей на экране вершины */
+.peak-camp { opacity: 0; animation: campIn .35s ease forwards; }
+@keyframes campIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ============================================================
+   Онбординг-карусель
+   ============================================================ */
+.onboarding {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  padding-top: calc(var(--safe-top) + 20px);
+  padding-bottom: calc(var(--safe-bottom) + 24px);
+  position: relative;
+}
+.onboarding__skip {
+  position: absolute;
+  top: calc(var(--safe-top) + 18px);
+  right: 20px;
+  background: none; border: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 2;
+}
+.onboarding__track {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.onboarding__track::-webkit-scrollbar { display: none; }
+.onboarding__slide {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center;
+  padding: 40px 32px;
+}
+.onboarding__icon { font-size: 56px; margin-bottom: 22px; animation: onbFloat 3s ease-in-out infinite; }
+@keyframes onbFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.onboarding__title { font-size: 20px; font-weight: 800; margin-bottom: 12px; }
+.onboarding__text { font-size: 14px; color: var(--text-muted); line-height: 1.6; max-width: 280px; }
+.onboarding__dots { display: flex; justify-content: center; gap: 7px; padding-top: 16px; }
+.onboarding__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); transition: background .2s, width .2s; }
+.onboarding__dot.is-active { background: var(--accent-xp); width: 18px; border-radius: 3px; }

@@ -241,6 +241,42 @@
   </form>
 </div>
 
+<!-- ============ ОНБОРДИНГ ============ -->
+<div class="overlay" id="onboardingOverlay" hidden style="align-items:stretch;">
+  <div class="onboarding">
+    <button type="button" class="onboarding__skip" id="btnSkipOnboarding">Пропустить</button>
+    <div class="onboarding__track" id="onboardingTrack">
+      <div class="onboarding__slide">
+        <div class="onboarding__icon">🗻</div>
+        <div class="onboarding__title">Твоя жизнь — горный хребет</div>
+        <div class="onboarding__text">Каждая цель — свой маршрут наверх. English, чтение, Go — у каждой свой путь.</div>
+      </div>
+      <div class="onboarding__slide">
+        <div class="onboarding__icon">⛺</div>
+        <div class="onboarding__title">Задания набирают высоту</div>
+        <div class="onboarding__text">Отмечаешь задание — поднимаешься по маршруту. Дошёл до лагеря — он зафиксирован навсегда, назад уже не откатится.</div>
+      </div>
+      <div class="onboarding__slide">
+        <div class="onboarding__icon">❄️</div>
+        <div class="onboarding__title">Стрик тает как снег</div>
+        <div class="onboarding__text">Сделал что-то сегодня — иней тает. Пропустил день — постепенно намерзает обратно.</div>
+      </div>
+      <div class="onboarding__slide">
+        <div class="onboarding__icon">🏔️</div>
+        <div class="onboarding__title">Экспедиции — рывок к дате</div>
+        <div class="onboarding__text">Для целей с настоящим дедлайном (например экзамен) — отдельный режим с реальными сроками.</div>
+      </div>
+      <div class="onboarding__slide">
+        <div class="onboarding__icon">🚩</div>
+        <div class="onboarding__title">Готов?</div>
+        <div class="onboarding__text">Создай первый хребет — это займёт 10 секунд.</div>
+        <button type="button" class="btn-primary" id="btnOnboardingCreate" style="margin-top:18px;">Создать первый хребет</button>
+      </div>
+    </div>
+    <div class="onboarding__dots" id="onboardingDots"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>

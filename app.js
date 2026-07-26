@@ -41,6 +41,7 @@ function defaultState() {
     dailyLog: {},
     purchases: {},
     lastRolloverDate: null,
+    onboardingSeen: false,
   };
 }
 let state = defaultState();
@@ -282,6 +283,24 @@ function promptCounterInput(q) {
 /* =====================================================================
    РЕНДЕР
    ===================================================================== */
+// ---- Плавный счёт чисел ----
+const numberCache = {};
+function animateNumber(key, el, to, suffix = '') {
+  const from = numberCache[key] !== undefined ? numberCache[key] : to;
+  numberCache[key] = to;
+  if (from === to) { el.textContent = to + suffix; return; }
+  const start = performance.now();
+  const duration = 500;
+  function tick(now) {
+    const p = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const val = Math.round(from + (to - from) * eased);
+    el.textContent = val + suffix;
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
 function renderAll() {
   renderHeader();
   renderRanges();
@@ -293,7 +312,7 @@ function renderAll() {
 function renderHeader() {
   const { total, current, next } = computeRank();
   document.getElementById('rankName').textContent = current.name;
-  document.getElementById('rankHeight').textContent = total + ' м';
+  animateNumber('rankHeight', document.getElementById('rankHeight'), total, ' м');
   const span = next ? (next.min - current.min) : 1;
   const progress = next ? Math.min(1, (total - current.min) / span) : 1;
   document.getElementById('rankFill').style.width = (progress * 100) + '%';
@@ -412,7 +431,7 @@ function renderQuests() {
 }
 
 function renderShop() {
-  document.getElementById('tokenBalance').textContent = state.tokens;
+  animateNumber('tokenBalance', document.getElementById('tokenBalance'), state.tokens, '');
   const wk = isoWeekKey();
   const used = state.purchases[wk] || 0;
   document.getElementById('coffeeLimitLabel').textContent = `${used} / ${COFFEE_WEEKLY_LIMIT} на этой неделе`;
@@ -464,12 +483,18 @@ function openPeakOverlay(rangeId) {
   document.getElementById('peakRangeTitle').textContent = `${r.icon} ${r.title}`;
   const weather = computeWeather(r);
   document.getElementById('peakWeather').textContent = `${weather.emoji} ${weather.label}`;
+
+  const sheetEl = document.querySelector('#peakOverlay .sheet');
+  sheetEl.classList.remove('weather-clear', 'weather-partly', 'weather-cloudy', 'weather-storm');
+  const weatherClassMap = { 'ясно': 'weather-clear', 'переменно': 'weather-partly', 'облачно': 'weather-cloudy', 'шторм': 'weather-storm' };
+  sheetEl.classList.add(weatherClassMap[weather.label] || 'weather-partly');
+
   const peak = r.currentPeak;
   let html = '';
   peak.camps.forEach((threshold, i) => {
     const reached = threshold <= peak.checkpointHeight;
     const isCurrent = !reached && (peak.camps[i - 1] || 0) <= peak.checkpointHeight;
-    html += `<div class="peak-camp ${reached ? 'is-reached' : ''} ${isCurrent ? 'is-current' : ''}">
+    html += `<div class="peak-camp ${reached ? 'is-reached' : ''} ${isCurrent ? 'is-current' : ''}" style="animation-delay:${i * 35}ms">
       <div class="peak-camp__dot"></div>
       <div class="peak-camp__label">Лагерь ${i + 1}</div>
       <div class="peak-camp__height">${threshold} м</div>
@@ -703,7 +728,37 @@ function wireAuthForm(auth) {
 function revealApp() {
   document.getElementById('app').hidden = false;
   document.getElementById('tabBar').hidden = false;
+  maybeShowOnboarding();
 }
+
+// ---- Онбординг ----
+function initOnboarding() {
+  const track = document.getElementById('onboardingTrack');
+  const dotsWrap = document.getElementById('onboardingDots');
+  const slideCount = track.children.length;
+  dotsWrap.innerHTML = Array.from({ length: slideCount }).map((_, i) => `<div class="onboarding__dot ${i === 0 ? 'is-active' : ''}"></div>`).join('');
+  track.addEventListener('scroll', () => {
+    const idx = Math.round(track.scrollLeft / track.clientWidth);
+    dotsWrap.querySelectorAll('.onboarding__dot').forEach((d, i) => d.classList.toggle('is-active', i === idx));
+  });
+  document.getElementById('btnSkipOnboarding').addEventListener('click', closeOnboarding);
+  document.getElementById('btnOnboardingCreate').addEventListener('click', () => {
+    closeOnboarding();
+    openRangeOverlay();
+  });
+}
+function closeOnboarding() {
+  document.getElementById('onboardingOverlay').hidden = true;
+  state.onboardingSeen = true;
+  persist();
+}
+function maybeShowOnboarding() {
+  if (!state.onboardingSeen && state.ranges.length === 0) {
+    document.getElementById('onboardingTrack').scrollLeft = 0;
+    document.getElementById('onboardingOverlay').hidden = false;
+  }
+}
+initOnboarding();
 
 function initAuth() {
   if (!window.MOUNTAIN_FIREBASE_CONFIGURED) {
