@@ -329,18 +329,16 @@ function computeRank() {
 // ---------- Задания: отметка выполнения ----------
 function toggleCheckQuest(q) {
   const day = ensureDay(todayStr());
-  const xp = DIFFICULTY_XP[q.difficulty];
-  let signal = null;
   if (day.quests[q.id]) {
-    day.quests[q.id] = false;
-    addHeight(q.rangeId, -xp);
-    state.tokens = Math.max(0, state.tokens - xp);
-  } else {
-    day.quests[q.id] = true;
-    signal = addHeight(q.rangeId, xp);
-    state.tokens += xp;
-    registerActivityToday();
+    showToast('Уже выполнено сегодня');
+    return;
   }
+  const xp = DIFFICULTY_XP[q.difficulty];
+  day.quests[q.id] = true;
+  if (q.repeat === 'once') q.archived = true;
+  const signal = addHeight(q.rangeId, xp);
+  state.tokens += xp;
+  registerActivityToday();
   persist(); renderAll();
   animateCheckbox(q.id);
   if (signal) {
@@ -355,19 +353,34 @@ function toggleCheckQuest(q) {
   }
 }
 
-function promptCounterInput(q) {
+let counterEditingQuestId = null;
+function openCounterOverlay(q) {
+  counterEditingQuestId = q.id;
   const day = ensureDay(todayStr());
   const current = day.quests[q.id] || 0;
-  const input = window.prompt(`${q.title} — сколько сделано сегодня? (${q.unit || ''})`, current);
-  if (input === null) return;
-  const val = Math.max(0, parseFloat(String(input).replace(',', '.')) || 0);
+  document.getElementById('counterOverlayTitle').textContent = q.title;
+  document.getElementById('counterOverlayUnitLabel').textContent = `Сколько сделано сегодня (${q.unit || 'ед.'}) · цель ${q.target}`;
+  document.getElementById('counterOverlayInput').value = current;
+  document.getElementById('counterOverlayInput').min = current;
+  document.getElementById('counterOverlay').hidden = false;
+}
+document.getElementById('btnCancelCounter').addEventListener('click', () => { document.getElementById('counterOverlay').hidden = true; });
+document.getElementById('btnSaveCounter').addEventListener('click', () => {
+  const q = state.quests.find(x => x.id === counterEditingQuestId);
+  if (!q) { document.getElementById('counterOverlay').hidden = true; return; }
+  const day = ensureDay(todayStr());
+  const current = day.quests[q.id] || 0;
+  const val = Math.max(0, parseFloat(document.getElementById('counterOverlayInput').value) || 0);
+  if (val < current) { showToast('За сегодня можно только увеличивать значение'); return; }
+  document.getElementById('counterOverlay').hidden = true;
   const delta = val - current;
   if (delta === 0) return;
   day.quests[q.id] = val;
+  if (q.repeat === 'once' && val >= q.target) q.archived = true;
   const xpDelta = Math.round(delta * q.xpPerUnit);
   const signal = addHeight(q.rangeId, xpDelta);
-  state.tokens = Math.max(0, state.tokens + xpDelta);
-  if (val > 0) registerActivityToday();
+  state.tokens += xpDelta;
+  registerActivityToday();
   persist(); renderAll();
   if (signal) {
     if (signal.campReached || signal.unlocked.length) pulseRangeCard(signal.rangeId);
@@ -379,7 +392,7 @@ function promptCounterInput(q) {
       showToast('⛺ Новый лагерь!');
     }
   }
-}
+});
 
 /* =====================================================================
    РЕНДЕР
@@ -467,17 +480,25 @@ function renderRanges() {
         <span class="range-card__icon">${r.icon}${r.type === 'expedition' ? ' 🎯' : ''}</span>
         <span class="range-card__title">${escapeHtml(r.title)}</span>
         <span class="range-card__weather">${weather.emoji}</span>
+        <button type="button" class="range-card__more" data-more-range="${r.id}">⋯</button>
       </div>
       ${renderRouteSvg(peak)}
       <div class="range-card__meta">${metaText}</div>`;
-    card.addEventListener('click', () => openPeakOverlay(r.id));
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.range-card__more')) return;
+      openPeakOverlay(r.id);
+    });
+    card.querySelector('.range-card__more').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openActionSheet('range', r.id, r.title);
+    });
     wrap.appendChild(card);
   });
   const addCard = document.createElement('button');
   addCard.type = 'button';
   addCard.className = 'range-add-card';
   addCard.textContent = '+';
-  addCard.addEventListener('click', openRangeOverlay);
+  addCard.addEventListener('click', () => openRangeOverlay());
   wrap.appendChild(addCard);
 }
 
@@ -494,7 +515,7 @@ function renderQuests() {
       <div class="empty-state__text">Добавь первое — это займёт 10 секунд.</div>
       <button type="button" class="btn-primary" id="emptyAddQuest">+ Добавить задание</button>
     </div>`;
-    document.getElementById('emptyAddQuest').addEventListener('click', openQuestOverlay);
+    document.getElementById('emptyAddQuest').addEventListener('click', () => openQuestOverlay());
     return;
   }
 
@@ -523,15 +544,24 @@ function renderQuests() {
         ? `<div class="checkbox ${doneToday ? 'is-checked' : ''}"><svg viewBox="0 0 24 24" style="fill:none;stroke:white;stroke-width:3"><path d="M4 12l6 6L20 6"/></svg></div>`
         : `<div class="quest-card__progress"><div class="quest-card__progress-fill" style="width:${progressPct}%"></div></div>`}
       <div class="quest-card__xp">${xpLabel}</div>
+      <button type="button" class="quest-card__more" data-more-id="${q.id}">⋯</button>
     </div>`;
   }).join('') + '</div>';
 
   wrap.querySelectorAll('.quest-card').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.quest-card__more')) return;
       const q = active.find(x => x.id === el.dataset.id);
       if (!q) return;
       if (q.kind === 'check') toggleCheckQuest(q);
-      else promptCounterInput(q);
+      else openCounterOverlay(q);
+    });
+  });
+  wrap.querySelectorAll('.quest-card__more').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const q = state.quests.find(x => x.id === btn.dataset.moreId);
+      if (q) openActionSheet('quest', q.id, q.title);
     });
   });
 }
@@ -622,11 +652,20 @@ function renderPeakAchievements(range) {
   const wrap = document.getElementById('peakAchievements');
   const items = SEVEN_SUMMITS.map(peak => {
     const unlocked = !!range.achievements[peak.key];
-    return `<div class="peak-achv__item ${unlocked ? 'is-unlocked' : ''}" title="${peak.name} · ${peak.continent} · ${peak.height} м">
+    return `<div class="peak-achv__item ${unlocked ? 'is-unlocked' : ''}" data-key="${peak.key}">
       <span>${unlocked ? '🚩' : '⛰️'}</span><span class="h">${peak.height}</span>
     </div>`;
   }).join('');
-  wrap.innerHTML = `<div class="peak-achv__title">Seven Summits</div><div class="peak-achv__grid">${items}</div>`;
+  wrap.innerHTML = `<div class="peak-achv__title">Seven Summits · тапни на плитку</div><div class="peak-achv__grid">${items}</div>`;
+  wrap.querySelectorAll('.peak-achv__item').forEach(el => {
+    el.addEventListener('click', () => {
+      const peak = SEVEN_SUMMITS.find(p => p.key === el.dataset.key);
+      const unlocked = !!range.achievements[peak.key];
+      showToast(unlocked
+        ? `🚩 ${peak.name} (${peak.continent}) — покорена · ${peak.height} м`
+        : `⛰️ ${peak.name} (${peak.continent}) — нужно ${peak.height} м, сейчас ${Math.round(range.careerHeight)} м`);
+    });
+  });
 }
 
 function closePeakOverlay() { document.getElementById('peakOverlay').hidden = true; }
@@ -679,20 +718,25 @@ function resetSegmented(containerId, attr, value) {
 
 // ---- Создание хребта ----
 let selectedRangeIcon = ICONS[0], selectedDifficulty = 1, selectedSize = 'week', selectedRangeType = 'regular';
+let editingRangeId = null;
 
-function openRangeOverlay() {
-  document.getElementById('rangeTitle').value = '';
+function openRangeOverlay(existingRange) {
+  editingRangeId = existingRange ? existingRange.id : null;
+  document.getElementById('rangeFormTitle').textContent = existingRange ? 'Редактировать хребет' : 'Новый хребет';
+  document.getElementById('rangeTitle').value = existingRange ? existingRange.title : '';
   document.getElementById('expeditionDeadline').value = '';
-  selectedRangeIcon = ICONS[0]; selectedDifficulty = 1; selectedSize = 'week'; selectedRangeType = 'regular';
+  selectedRangeIcon = existingRange ? existingRange.icon : ICONS[0];
+  selectedDifficulty = 1; selectedSize = 'week'; selectedRangeType = 'regular';
   buildIconGrid('rangeIconGrid', ic => selectedRangeIcon = ic, selectedRangeIcon);
   resetSegmented('rangeDifficulty', 'diff', 1);
   resetSegmented('rangeSize', 'size', 'week');
   resetSegmented('rangeType', 'type', 'regular');
   document.getElementById('expeditionDateField').hidden = true;
+  document.getElementById('rangeCreateOnlyFields').hidden = !!existingRange;
   document.getElementById('rangeOverlay').hidden = false;
 }
-document.getElementById('btnAddRange').addEventListener('click', openRangeOverlay);
-document.getElementById('btnCancelRange').addEventListener('click', () => { document.getElementById('rangeOverlay').hidden = true; });
+document.getElementById('btnAddRange').addEventListener('click', () => openRangeOverlay());
+document.getElementById('btnCancelRange').addEventListener('click', () => { document.getElementById('rangeOverlay').hidden = true; editingRangeId = null; });
 document.getElementById('rangeType').addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
   resetSegmented('rangeType', 'type', btn.dataset.type);
@@ -713,6 +757,13 @@ document.getElementById('rangeForm').addEventListener('submit', e => {
   e.preventDefault();
   const title = document.getElementById('rangeTitle').value.trim();
   if (!title) return;
+  if (editingRangeId) {
+    const r = getRange(editingRangeId);
+    if (r) { r.title = title; r.icon = selectedRangeIcon; persist(); renderAll(); }
+    document.getElementById('rangeOverlay').hidden = true;
+    editingRangeId = null;
+    return;
+  }
   let deadline = null;
   if (selectedRangeType === 'expedition') {
     deadline = document.getElementById('expeditionDeadline').value;
@@ -750,29 +801,32 @@ function buildDiffGrid() {
     });
   });
 }
-function openQuestOverlay() {
+let editingQuestId = null;
+function openQuestOverlay(existingQuest) {
   if (state.ranges.length === 0) { showToast('Сначала создай хотя бы один хребет'); return; }
-  document.getElementById('questTitle').value = '';
-  document.getElementById('counterTarget').value = '';
-  document.getElementById('counterUnit').value = '';
-  document.getElementById('counterXpPerUnit').value = 2;
-  selectedQuestIcon = ICONS[0];
-  selectedQuestRangeId = state.ranges[0].id;
-  selectedQuestType = 'check';
-  selectedQuestDifficulty = 'medium';
-  selectedQuestRepeat = 'daily';
+  editingQuestId = existingQuest ? existingQuest.id : null;
+  document.getElementById('questFormTitle').textContent = existingQuest ? 'Редактировать задание' : 'Новое задание';
+  document.getElementById('questTitle').value = existingQuest ? existingQuest.title : '';
+  document.getElementById('counterTarget').value = existingQuest && existingQuest.kind === 'counter' ? existingQuest.target : '';
+  document.getElementById('counterUnit').value = existingQuest && existingQuest.kind === 'counter' ? existingQuest.unit : '';
+  document.getElementById('counterXpPerUnit').value = existingQuest && existingQuest.kind === 'counter' ? existingQuest.xpPerUnit : 2;
+  selectedQuestIcon = existingQuest ? existingQuest.icon : ICONS[0];
+  selectedQuestRangeId = existingQuest ? existingQuest.rangeId : state.ranges[0].id;
+  selectedQuestType = existingQuest ? existingQuest.kind : 'check';
+  selectedQuestDifficulty = existingQuest && existingQuest.kind === 'check' ? existingQuest.difficulty : 'medium';
+  selectedQuestRepeat = existingQuest ? existingQuest.repeat : 'daily';
 
   buildIconGrid('iconGrid', ic => selectedQuestIcon = ic, selectedQuestIcon);
   buildRangePicker();
   buildDiffGrid();
-  resetSegmented('typeSegmented', 'type', 'check');
-  resetSegmented('repeatSegmented', 'repeat', 'daily');
-  document.getElementById('diffField').hidden = false;
-  document.getElementById('counterField').hidden = true;
+  resetSegmented('typeSegmented', 'type', selectedQuestType);
+  resetSegmented('repeatSegmented', 'repeat', selectedQuestRepeat);
+  document.getElementById('diffField').hidden = selectedQuestType !== 'check';
+  document.getElementById('counterField').hidden = selectedQuestType !== 'counter';
   document.getElementById('questOverlay').hidden = false;
 }
-document.getElementById('btnAddQuest').addEventListener('click', openQuestOverlay);
-document.getElementById('btnCancelQuest').addEventListener('click', () => { document.getElementById('questOverlay').hidden = true; });
+document.getElementById('btnAddQuest').addEventListener('click', () => openQuestOverlay());
+document.getElementById('btnCancelQuest').addEventListener('click', () => { document.getElementById('questOverlay').hidden = true; editingQuestId = null; });
 document.getElementById('typeSegmented').addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
   resetSegmented('typeSegmented', 'type', btn.dataset.type);
@@ -789,6 +843,26 @@ document.getElementById('questForm').addEventListener('submit', e => {
   e.preventDefault();
   const title = document.getElementById('questTitle').value.trim();
   if (!title || !selectedQuestRangeId) return;
+  if (editingQuestId) {
+    const q = state.quests.find(x => x.id === editingQuestId);
+    if (q) {
+      q.title = title; q.icon = selectedQuestIcon; q.rangeId = selectedQuestRangeId;
+      q.kind = selectedQuestType; q.repeat = selectedQuestRepeat;
+      if (selectedQuestType === 'check') {
+        q.difficulty = selectedQuestDifficulty;
+        delete q.target; delete q.unit; delete q.xpPerUnit;
+      } else {
+        q.target = parseFloat(document.getElementById('counterTarget').value) || 10;
+        q.unit = document.getElementById('counterUnit').value.trim() || 'ед.';
+        q.xpPerUnit = parseFloat(document.getElementById('counterXpPerUnit').value) || 2;
+        delete q.difficulty;
+      }
+    }
+    persist(); renderAll();
+    document.getElementById('questOverlay').hidden = true;
+    editingQuestId = null;
+    return;
+  }
   const quest = { id: uid(), title, icon: selectedQuestIcon, rangeId: selectedQuestRangeId, kind: selectedQuestType, repeat: selectedQuestRepeat, archived: false };
   if (selectedQuestType === 'check') {
     quest.difficulty = selectedQuestDifficulty;
@@ -800,6 +874,40 @@ document.getElementById('questForm').addEventListener('submit', e => {
   state.quests.push(quest);
   persist(); renderAll();
   document.getElementById('questOverlay').hidden = true;
+});
+
+// ---- Быстрые действия (редактировать/удалить) ----
+let actionSheetContext = null;
+function openActionSheet(type, id, title) {
+  actionSheetContext = { type, id };
+  document.getElementById('actionSheetTitle').textContent = title;
+  document.getElementById('actionSheetOverlay').hidden = false;
+}
+document.getElementById('actionCancel').addEventListener('click', () => { document.getElementById('actionSheetOverlay').hidden = true; });
+document.getElementById('actionEdit').addEventListener('click', () => {
+  document.getElementById('actionSheetOverlay').hidden = true;
+  if (!actionSheetContext) return;
+  if (actionSheetContext.type === 'quest') {
+    const q = state.quests.find(x => x.id === actionSheetContext.id);
+    if (q) openQuestOverlay(q);
+  } else {
+    const r = getRange(actionSheetContext.id);
+    if (r) openRangeOverlay(r);
+  }
+});
+document.getElementById('actionDelete').addEventListener('click', () => {
+  document.getElementById('actionSheetOverlay').hidden = true;
+  if (!actionSheetContext) return;
+  if (actionSheetContext.type === 'quest') {
+    if (!confirm('Удалить это задание?')) return;
+    state.quests = state.quests.filter(q => q.id !== actionSheetContext.id);
+  } else {
+    if (!confirm('Удалить хребет вместе со всеми его заданиями? Это необратимо.')) return;
+    state.quests = state.quests.filter(q => q.rangeId !== actionSheetContext.id);
+    state.ranges = state.ranges.filter(r => r.id !== actionSheetContext.id);
+    if (currentPeakRangeId === actionSheetContext.id) closePeakOverlay();
+  }
+  persist(); renderAll();
 });
 
 // ---- Вершина: закрытие / оставить ----

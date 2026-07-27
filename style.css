@@ -1011,3 +1011,21 @@ body {
   color-scheme: dark;
 }
 .field input[type="date"]:focus { border-color: var(--accent-xp); outline: none; }
+
+.peak-achv__item { cursor: pointer; }
+.peak-achv__item:active { transform: scale(0.9); }
+
+/* Кнопки быстрых действий на карточках */
+.range-card__more, .quest-card__more {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 15px;
+  padding: 2px 5px;
+  cursor: pointer;
+  line-height: 1;
+  border-radius: 6px;
+}
+.range-card__more:hover, .quest-card__more:hover { color: var(--text); background: var(--surface-2); }
+.quest-card__more { align-self: flex-start; }
