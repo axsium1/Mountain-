@@ -38,6 +38,46 @@ const SEVEN_SUMMITS = [
 ];
 
 const ICONS = ['📖','🔤','💻','📚','🏃','🧘','🎸','🎨','✍️','🧠','💪','🗣️','🔬','🎯','⏱️','🌱','🍎','💧','🛌','📐','🧩','🎧','🖌️','🧪','🗂️','📈','🧗','🚴','🏊','🥗'];
+const RANGE_COLORS = ['#7C5CFF', '#4C8EFF', '#34D399', '#FF7A45', '#FF5D8F', '#FFD166', '#7DD3FC'];
+
+// ---- Параллакс ленты хребтов ----
+function updateRangeParallax() {
+  const scroll = document.getElementById('rangeScroll');
+  if (!scroll) return;
+  const rect = scroll.getBoundingClientRect();
+  const center = rect.left + rect.width / 2;
+  scroll.querySelectorAll('.range-card').forEach(card => {
+    const cardRect = card.getBoundingClientRect();
+    const cardCenter = cardRect.left + cardRect.width / 2;
+    const dist = Math.abs(center - cardCenter);
+    const scale = Math.max(0.93, 1 - dist / 2200).toFixed(3);
+    const opacity = Math.max(0.65, 1 - dist / 900).toFixed(2);
+    card.style.transform = `scale(${scale})`;
+    card.style.opacity = opacity;
+  });
+}
+function initRangeParallax() {
+  const scroll = document.getElementById('rangeScroll');
+  if (!scroll) return;
+  scroll.addEventListener('scroll', updateRangeParallax, { passive: true });
+  window.addEventListener('resize', updateRangeParallax);
+}
+
+// ---- Кольцо-пульс для крупных событий ----
+function spawnPulseRing(targetEl, color) {
+  if (!targetEl) return;
+  const rect = targetEl.getBoundingClientRect();
+  const ring = document.createElement('div');
+  ring.className = 'pulse-ring';
+  const size = Math.max(rect.width, rect.height);
+  ring.style.left = (rect.left + rect.width / 2) + 'px';
+  ring.style.top = (rect.top + rect.height / 2) + 'px';
+  ring.style.width = size + 'px';
+  ring.style.height = size + 'px';
+  if (color) ring.style.borderColor = color;
+  document.body.appendChild(ring);
+  setTimeout(() => ring.remove(), 850);
+}
 
 // ---------- Состояние ----------
 function defaultState() {
@@ -118,11 +158,11 @@ function makePeak(size, difficulty) {
   return { size, totalHeight, camps, checkpointHeight: 0, currentHeight: 0, createdAt: todayStr() };
 }
 
-function createRange({ title, icon, difficulty, size, type, deadline }) {
+function createRange({ title, icon, color, difficulty, size, type, deadline }) {
   const peak = makePeak(size, difficulty);
   if (type === 'expedition' && deadline) peak.deadline = deadline;
   const range = {
-    id: uid(), title, icon, difficulty, type: type || 'regular',
+    id: uid(), title, icon, color: color || RANGE_COLORS[0], difficulty, type: type || 'regular',
     careerHeight: 0,
     achievements: {},
     history: [],
@@ -347,6 +387,7 @@ function toggleCheckQuest(q) {
       const names = signal.unlocked.map(p => p.name).join(', ');
       const tokens = signal.unlocked.reduce((s, p) => s + p.tokens, 0);
       showToast(`🚩 ${names} покорён! +${tokens}`);
+      spawnPulseRing(document.querySelector(`.range-card[data-range-id="${signal.rangeId}"]`), (getRange(signal.rangeId) || {}).color);
     } else if (signal.campReached) {
       showToast('⛺ Новый лагерь!');
     }
@@ -388,6 +429,7 @@ document.getElementById('btnSaveCounter').addEventListener('click', () => {
       const names = signal.unlocked.map(p => p.name).join(', ');
       const tokens = signal.unlocked.reduce((s, p) => s + p.tokens, 0);
       showToast(`🚩 ${names} покорён! +${tokens}`);
+      spawnPulseRing(document.querySelector(`.range-card[data-range-id="${signal.rangeId}"]`), (getRange(signal.rangeId) || {}).color);
     } else if (signal.campReached) {
       showToast('⛺ Новый лагерь!');
     }
@@ -437,7 +479,8 @@ function renderHeader() {
   document.getElementById('streakNum').textContent = state.streak.current;
 }
 
-function renderRouteSvg(peak) {
+function renderRouteSvg(peak, color) {
+  const accent = color || 'var(--accent-xp)';
   const n = peak.camps.length;
   const pts = [[8, 40]];
   for (let i = 1; i <= n; i++) {
@@ -445,7 +488,15 @@ function renderRouteSvg(peak) {
     const y = 40 - (32 / n) * i - (i % 2 === 0 ? 0 : 4);
     pts.push([x, y]);
   }
-  const line = pts.map(p => p.join(',')).join(' ');
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const midX = (pts[i][0] + pts[i + 1][0]) / 2;
+    const midY = (pts[i][1] + pts[i + 1][1]) / 2;
+    d += ` Q ${pts[i][0]},${pts[i][1]} ${midX},${midY}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L ${last[0]},${last[1]}`;
+
   let circles = '';
   pts.forEach((p, i) => {
     if (i === 0) return;
@@ -453,11 +504,11 @@ function renderRouteSvg(peak) {
     const reached = threshold <= peak.checkpointHeight;
     const isCurrentBand = !reached && (peak.camps[i - 2] || 0) <= peak.checkpointHeight;
     const r = isCurrentBand ? 4.5 : 3.5;
-    const fill = reached ? 'var(--accent-xp)' : 'transparent';
-    const stroke = (reached || isCurrentBand) ? 'var(--accent-xp)' : 'var(--line)';
+    const fill = reached ? accent : 'transparent';
+    const stroke = (reached || isCurrentBand) ? accent : 'var(--line)';
     circles += `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" style="fill:${fill};stroke:${stroke};stroke-width:1.5"/>`;
   });
-  return `<svg class="range-card__svg" viewBox="0 0 120 48"><polyline points="${line}" style="fill:none;stroke:var(--line);stroke-width:1.5"/>${circles}</svg>`;
+  return `<svg class="range-card__svg" viewBox="0 0 120 48"><path d="${d}" style="stroke:${accent}"/>${circles}</svg>`;
 }
 
 function renderRanges() {
@@ -470,6 +521,8 @@ function renderRanges() {
     const card = document.createElement('div');
     card.className = 'range-card';
     card.dataset.rangeId = r.id;
+    const accent = r.color || '#7C5CFF';
+    card.style.borderTopColor = accent + '73';
     const metaText = (peak.deadline && !peak.completed)
       ? `${peak.currentHeight} / ${peak.totalHeight} м · ${Math.max(0, daysBetweenDates(todayStr(), peak.deadline))} дн. до дедлайна`
       : peak.completed
@@ -482,7 +535,7 @@ function renderRanges() {
         <span class="range-card__weather">${weather.emoji}</span>
         <button type="button" class="range-card__more" data-more-range="${r.id}">⋯</button>
       </div>
-      ${renderRouteSvg(peak)}
+      ${renderRouteSvg(peak, accent)}
       <div class="range-card__meta">${metaText}</div>`;
     card.addEventListener('click', (e) => {
       if (e.target.closest('.range-card__more')) return;
@@ -500,6 +553,7 @@ function renderRanges() {
   addCard.textContent = '+';
   addCard.addEventListener('click', () => openRangeOverlay());
   wrap.appendChild(addCard);
+  updateRangeParallax();
 }
 
 function renderQuests() {
@@ -623,6 +677,7 @@ function openPeakOverlay(rangeId) {
   document.getElementById('peakWeather').textContent = `${weather.emoji} ${weather.label}`;
 
   const sheetEl = document.querySelector('#peakOverlay .sheet');
+  sheetEl.style.setProperty('--range-accent', r.color || '#7C5CFF');
   sheetEl.classList.remove('weather-clear', 'weather-partly', 'weather-cloudy', 'weather-storm');
   const weatherClassMap = { 'ясно': 'weather-clear', 'переменно': 'weather-partly', 'облачно': 'weather-cloudy', 'шторм': 'weather-storm' };
   sheetEl.classList.add(weatherClassMap[weather.label] || 'weather-partly');
@@ -710,6 +765,17 @@ function buildIconGrid(containerId, onSelect, defaultIcon) {
     });
   });
 }
+function buildColorGrid(containerId, onSelect, defaultColor) {
+  const grid = document.getElementById(containerId);
+  grid.innerHTML = RANGE_COLORS.map(c => `<button type="button" class="color-swatch ${c === defaultColor ? 'is-selected' : ''}" style="background:${c}" data-color="${c}"></button>`).join('');
+  grid.querySelectorAll('.color-swatch').forEach(btn => {
+    btn.addEventListener('click', () => {
+      grid.querySelectorAll('.color-swatch').forEach(b => b.classList.remove('is-selected'));
+      btn.classList.add('is-selected');
+      onSelect(btn.dataset.color);
+    });
+  });
+}
 function resetSegmented(containerId, attr, value) {
   document.getElementById(containerId).querySelectorAll('button').forEach(b => {
     b.classList.toggle('is-active', b.dataset[attr] === String(value));
@@ -717,7 +783,7 @@ function resetSegmented(containerId, attr, value) {
 }
 
 // ---- Создание хребта ----
-let selectedRangeIcon = ICONS[0], selectedDifficulty = 1, selectedSize = 'week', selectedRangeType = 'regular';
+let selectedRangeIcon = ICONS[0], selectedDifficulty = 1, selectedSize = 'week', selectedRangeType = 'regular', selectedRangeColor = RANGE_COLORS[0];
 let editingRangeId = null;
 
 function openRangeOverlay(existingRange) {
@@ -726,8 +792,10 @@ function openRangeOverlay(existingRange) {
   document.getElementById('rangeTitle').value = existingRange ? existingRange.title : '';
   document.getElementById('expeditionDeadline').value = '';
   selectedRangeIcon = existingRange ? existingRange.icon : ICONS[0];
+  selectedRangeColor = existingRange && existingRange.color ? existingRange.color : RANGE_COLORS[0];
   selectedDifficulty = 1; selectedSize = 'week'; selectedRangeType = 'regular';
   buildIconGrid('rangeIconGrid', ic => selectedRangeIcon = ic, selectedRangeIcon);
+  buildColorGrid('rangeColorGrid', c => selectedRangeColor = c, selectedRangeColor);
   resetSegmented('rangeDifficulty', 'diff', 1);
   resetSegmented('rangeSize', 'size', 'week');
   resetSegmented('rangeType', 'type', 'regular');
@@ -759,7 +827,7 @@ document.getElementById('rangeForm').addEventListener('submit', e => {
   if (!title) return;
   if (editingRangeId) {
     const r = getRange(editingRangeId);
-    if (r) { r.title = title; r.icon = selectedRangeIcon; persist(); renderAll(); }
+    if (r) { r.title = title; r.icon = selectedRangeIcon; r.color = selectedRangeColor; persist(); renderAll(); }
     document.getElementById('rangeOverlay').hidden = true;
     editingRangeId = null;
     return;
@@ -770,7 +838,7 @@ document.getElementById('rangeForm').addEventListener('submit', e => {
     if (!deadline) { showToast('Укажи дату дедлайна'); return; }
     if (deadline <= todayStr()) { showToast('Дедлайн должен быть в будущем'); return; }
   }
-  createRange({ title, icon: selectedRangeIcon, difficulty: selectedDifficulty, size: selectedSize, type: selectedRangeType, deadline });
+  createRange({ title, icon: selectedRangeIcon, color: selectedRangeColor, difficulty: selectedDifficulty, size: selectedSize, type: selectedRangeType, deadline });
   document.getElementById('rangeOverlay').hidden = true;
 });
 
@@ -1032,6 +1100,7 @@ function maybeShowOnboarding() {
   }
 }
 initOnboarding();
+initRangeParallax();
 
 function initAuth() {
   if (!window.MOUNTAIN_FIREBASE_CONFIGURED) {
